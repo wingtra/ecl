@@ -150,25 +150,26 @@ private:
 	Quaternion _q_down_sampled;		// down sampled quaternion (tracking delta angles between ekf update steps)
 
 	// variables used for the GPS quality checks
-	float _gpsDriftVelN;        // GPS north position derivative (m/s)
-	float _gpsDriftVelE;        // GPS east position derivative (m/s)
-	float _gps_drift_velD;      // GPS down position derivative (m/s)
-	float _gps_velD_diff_filt;  // GPS filtered Down velocity (m/s)
-	float _gps_velN_filt;       // GPS filtered North velocity (m/s)
-	float _gps_velE_filt;       // GPS filtered East velocity (m/s)
-	uint64_t _last_gps_fail_us; // last system time in usec that the GPS failed it's checks
+	float _gpsDriftVelN = 0.0f;     // GPS north position derivative (m/s)
+	float _gpsDriftVelE = 0.0f;     // GPS east position derivative (m/s)
+	float _gps_drift_velD = 0.0f;     // GPS down position derivative (m/s)
+	float _gps_velD_diff_filt = 0.0f;   // GPS filtered Down velocity (m/s)
+	float _gps_velN_filt = 0.0f;  // GPS filtered North velocity (m/s)
+	float _gps_velE_filt = 0.0f;   // GPS filtered East velocity (m/s)
+	uint64_t _last_gps_fail_us = 0;   // last system time in usec that the GPS failed it's checks
+	bool _fuse_range_data;
 
 	// Variables used to publish the WGS-84 location of the EKF local NED origin
 	uint64_t _last_gps_origin_time_us;  // time the origin was last set (uSec)
 	float _gps_alt_ref;                 // WGS-84 height (m)
 
 	// Variables used to initialise the filter states
-	uint8_t _baro_counter;         // number of baro samples averaged
-	float _baro_sum;               // summed baro measurement
-	uint8_t _mag_counter;          // number of magnetometer samples averaged
-	Vector3f _mag_sum;             // summed magnetometer measurement
-	Vector3f _delVel_sum;          // summed delta velocity
-	float _baro_at_alignment;      // baro offset relative to alignment position
+	uint8_t _hgt_counter = 0;      // number of baro samples averaged
+	float _hgt_sum = 0.0f;         // summed baro measurement
+	uint8_t _mag_counter = 0;       // number of magnetometer samples averaged
+	Vector3f _mag_sum = {};         // summed magnetometer measurement
+	Vector3f _delVel_sum = {};      // summed delta velocity
+	float _hgt_at_alignment;       // baro offset relative to alignment position
 
 	gps_check_fail_status_u _gps_check_fail_status;
 
