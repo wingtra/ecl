@@ -196,13 +196,13 @@ protected:
 	bool _vehicle_armed;    // vehicle arm status used to turn off functionality used on the ground
 	bool _in_air;           // we assume vehicle is in the air, set by the given landing detector
 
-	bool _NED_origin_initialised;
-	bool _gps_speed_valid;
-	float _gps_speed_accuracy;                  // GPS receiver reported speed accuracy (m/s)
-	struct map_projection_reference_s _pos_ref; // Contains WGS-84 position latitude and longitude (radians)
-	float _gps_hpos_accuracy; // GPS receiver reported 1-sigma horizontal accuracy (m)
-	float _gps_origin_eph; // horizontal position uncertainty of the GPS origin
-	float _gps_origin_epv; // vertical position uncertainty of the GPS origin
+	bool _NED_origin_initialised = false;
+	bool _gps_speed_valid = false;
+	float _gps_speed_accuracy = 0.0f; // GPS receiver reported 1-sigma speed accuracy (m/s)
+	float _gps_hpos_accuracy = 0.0f; // GPS receiver reported 1-sigma horizontal accuracy (m)
+	float _gps_origin_eph = 0.0f; // horizontal position uncertainty of the GPS origin
+	float _gps_origin_epv = 0.0f; // vertical position uncertainty of the GPS origin
+	struct map_projection_reference_s _pos_ref = {};    // Contains WGS-84 position latitude and longitude (radians)
 
 	bool _mag_healthy;              // computed by mag innovation test
 	float _yaw_test_ratio;          // yaw innovation consistency check ratio
