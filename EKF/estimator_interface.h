@@ -203,6 +203,8 @@ protected:
 	float _gps_origin_eph = 0.0f; // horizontal position uncertainty of the GPS origin
 	float _gps_origin_epv = 0.0f; // vertical position uncertainty of the GPS origin
 	struct map_projection_reference_s _pos_ref = {};    // Contains WGS-84 position latitude and longitude (radians)
+	float _gps_origin_eph = 0.0f; // horizontal position uncertainty of the GPS origin
+	float _gps_origin_epv = 0.0f; // vertical position uncertainty of the GPS origin
 
 	bool _mag_healthy;              // computed by mag innovation test
 	float _yaw_test_ratio;          // yaw innovation consistency check ratio
