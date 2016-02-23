@@ -59,7 +59,6 @@ void Ekf::controlFusionModes()
 				//use flow if present and 
 				resetPosition();
 				resetVelocity();
-				_healthy_optical_flow = false;
 			}
 		}
 	}
@@ -138,7 +137,6 @@ void Ekf::controlFusionModes()
 				resetVelocity();
 			}
 
-			_healthy_optical_flow = false;
 		}
 	}
 
