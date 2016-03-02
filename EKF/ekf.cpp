@@ -66,10 +66,10 @@ Ekf::Ekf():
 	_last_gps_fail_us(0),
 	_last_gps_origin_time_us(0),
 	_gps_alt_ref(0.0f),
-	_baro_counter(0),
-	_baro_sum(0.0f),
+	_hgt_counter(0),
+	_hgt_sum(0.0f),
 	_mag_counter(0),
-	_baro_at_alignment(0.0f)
+	_hgt_at_alignment(0.0f)
 {
 	_control_status = {};
 	_control_status_prev = {};

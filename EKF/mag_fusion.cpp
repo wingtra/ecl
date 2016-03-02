@@ -678,15 +678,6 @@ void Ekf::fuseHeading()
 		}
 	}
 
-	// rotate the magnetometer measurement into earth frame
-	matrix::Euler<float> euler(_state.quat_nominal);
-	float predicted_hdg = euler(2); // we will need the predicted heading to calculate the innovation
-
-	// Set the yaw angle to zero and rotate the measurements into earth frame using the zero yaw angle
-	euler(2) = 0.0f;
-	matrix::Dcm<float> R_to_earth(euler);
-	matrix::Vector3f mag_earth_pred = R_to_earth * _mag_sample_delayed.mag;
-
 	// Use the difference between the horizontal projection of the mag field and declination to give the measured heading
 	float measured_hdg = -atan2f(mag_earth_pred(1), mag_earth_pred(0)) + _mag_declination;
 
