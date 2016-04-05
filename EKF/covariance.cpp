@@ -98,8 +98,8 @@ void Ekf::initialiseCovariance()
 	P[21][21] = 0.0f;
 
 	// wind
-	P[22][22] = 0.0f;
-	P[23][23] = 0.0f;
+	P[22][22] = 30.0f;
+	P[23][23] = 30.0f;
 
 }
 
@@ -644,10 +644,13 @@ void Ekf::predictCovariance()
 
 	// Don't do covariance prediction on wind states unless we are using them
 	if (_control_status.flags.wind) {
-		// Check if we have jsut transitioned to using wind states and set the variances accordingly
-		if (!_control_status_prev.flags.mag_3D) {
+		// Check if we have just transitioned to using wind states and set the variances accordingly
+		if (!_control_status_prev.flags.wind) {
+			float ground_speed_xy = sq(_state.vel(0) * _state.vel(0) + _state.vel(1) * _state.vel(1))
+			float wind_magnitude = ground_speed_xy - sq(_airspeed_buffer.get_newest() *  _airspeed_buffer.get_newest() - _state.vel(2) * _state.vel(2));
 			for (uint8_t index = 22; index <= 23; index++) {
 				// TODO initialise wind states using ground speed and airspeed and set initial variance using sum of ground speed and airspeed variances
+
 				P[index][index] = sq(5.0f);
 			}
 		}
@@ -728,6 +731,9 @@ void Ekf::predictCovariance()
 
 	// copy variances (diagonals)
 	for (unsigned i = 0; i < _k_num_states; i++) {
+		if(!_control_status.flags.wind && i > 21) {
+			continue;
+		}
 		P[i][i] = nextP[i][i];
 	}
 
