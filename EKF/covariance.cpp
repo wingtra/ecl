@@ -202,7 +202,10 @@ void Ekf::predictCovariance()
 	}
 
 	for (unsigned i = 22; i < 24; i++) {
-		process_noise[i] = sq(wind_vel_sig);
+		// only grow wind states covariance if we are estimating wind
+		if (_control_status.flags.wind) {
+			process_noise[i] = sq(wind_vel_sig);
+		}
 	}
 
 
