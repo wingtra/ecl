@@ -341,17 +341,11 @@ void Ekf::controlFusionModes()
 		_control_status.flags.rng_hgt = true;
 	}
 
-	// compute covariance magnitude of wind states
-	//float wind_cov_mag = sq(P[22][22] * P[22][22] + P[23][23] * P[23][23]);
-
-	// if the airspeed measurements have timed out and the covariance magnitude of the wind states
-	// has grown too large then we declare the wind estimate to be invalid
-	// this will stop wind covariance growth in the covarinace prediction and covariance update
-	// stemming from other measurements
+	// if the airspeed measurements have timed out we declare the wind estimate to be invalid
 	if (_time_last_imu - _time_last_arsp_fuse > 3) {
 		_control_status.flags.wind = false;
 	} else {
-		_control_status.flags.wind = false;
+		_control_status.flags.wind = true;
 	}
 
 	// Store the status to enable change detection
