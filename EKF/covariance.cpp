@@ -98,8 +98,8 @@ void Ekf::initialiseCovariance()
 	P[21][21] = 0.0f;
 
 	// wind
-	P[22][22] = 30.0f;
-	P[23][23] = 30.0f;
+	P[22][22] = 0.0f;
+	P[23][23] = 0.0f;
 
 }
 
@@ -202,8 +202,7 @@ void Ekf::predictCovariance()
 	}
 
 	for (unsigned i = 22; i < 24; i++) {
-			process_noise[i] = sq(wind_vel_sig);
-		}
+		process_noise[i] = sq(wind_vel_sig);
 	}
 
 
@@ -644,11 +643,45 @@ void Ekf::predictCovariance()
 	if (_control_status.flags.wind) {
 		// Check if we have just transitioned to using wind states and set the variances accordingly
 		if (!_control_status_prev.flags.wind) {
-			float ground_speed_xy = sq(_state.vel(0) * _state.vel(0) + _state.vel(1) * _state.vel(1))
-			float wind_magnitude = ground_speed_xy - sq(_airspeed_buffer.get_newest() *  _airspeed_buffer.get_newest() - _state.vel(2) * _state.vel(2));
-			for (uint8_t index = 22; index <= 23; index++) {
-				// TODO initialise wind states using ground speed and airspeed and set initial variance using sum of ground speed and airspeed variances
+			// simple initialisation of wind states: calculate wind component along the forward axis
+			// of the plane.
+			
+			matrix::Euler<float> euler(_output_new.quat_nominal);
+			float heading = euler(2);
 
+			// ground speed component in the xy plane projected onto the directon the plane is heading to
+			float ground_speed_xy_nose = _output_new.vel(0) * cosf(heading) + _output_new.vel(1) * sinf(heading);
+			airspeedSample tmp = _airspeed_buffer.get_newest();
+			float airspeed = tmp.true_airspeed;
+
+			// check if the calculation is well conditioned:
+			// our airspeed measurement is at least as hight as our down velocity and the plane is moving forward
+			if (airspeed > fabsf(_output_new.vel(2)) && ground_speed_xy_nose > 0) {
+	
+				float ground_speed = sqrtf(_output_new.vel(0) * _output_new.vel(0) + _output_new.vel(1) * _output_new.vel(1) + _output_new.vel(2) * _output_new.vel(2));
+				
+				// wind magnitude in the direction the plane is
+				float wind_magnitude = ground_speed_xy_nose -  sqrtf(airspeed *  airspeed - _output_new.vel(2) * _output_new.vel(2));
+
+				// determine direction of wind
+				float wind_sign = 1;
+				if (airspeed < ground_speed) {
+					// wind is in nose direction
+					wind_sign = 1;
+				} else {
+					wind_sign = -1;
+				}
+
+				_state.wind_vel(0) = cosf(heading) * wind_magnitude * wind_sign;
+				_state.wind_vel(1) = sinf(heading) * wind_magnitude * wind_sign;
+
+			} else {
+				// calculation is badly conditioned, just set wind states to zero
+				_state.wind_vel.setZero();
+			}
+			printf("init cov for wind\n");
+			// initialise diagonal of covariance matrix for the wind velocity states
+			for (uint8_t index = 22; index <= 23; index++) {
 				P[index][index] = sq(5.0f);
 			}
 		}

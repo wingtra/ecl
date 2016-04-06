@@ -217,7 +217,6 @@ void Ekf::fuseVelPosHeight()
 
 		// only update wind states if we are doing wind estimation
 		if (_control_status.flags.wind) {
-			printf("updating cov\n");
 			for (int row = 22; row <= 23; row++) {
 				Kfusion[row] = P[row][state_index] / _vel_pos_innov_var[obs_index];
 			}

@@ -180,7 +180,6 @@ bool Ekf::update()
 		// perform state and covariance prediction for the main filter
 		predictState();
 		predictCovariance();
-		printf("P imu %.5f\n", (double)P[22][22]);
 
 		// perform state and variance prediction for the terrain estimator
 		if (!_terrain_initialised) {

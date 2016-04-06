@@ -117,7 +117,7 @@ public:
 
 	virtual bool collect_baro(uint64_t time_usec, float *data) { return true; }
 
-	virtual bool collect_airspeed(uint64_t time_usec, float *data) { return true; }
+	virtual bool collect_airspeed(uint64_t time_usec, float *true_airspeed, float *eas2tas) { return true; }
 
 	virtual bool collect_range(uint64_t time_usec, float *data) { return true; }
 
@@ -137,7 +137,7 @@ public:
 	void setBaroData(uint64_t time_usec, float *data);
 
 	// set airspeed data
-	void setAirspeedData(uint64_t time_usec, float *data);
+	void setAirspeedData(uint64_t time_usec, float *true_airspeed, float *eas2tas);
 
 	// set range data
 	void setRangeData(uint64_t time_usec, float *data);
