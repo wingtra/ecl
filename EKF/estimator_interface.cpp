@@ -203,7 +203,11 @@ void EstimatorInterface::setBaroData(uint64_t time_usec, float *data)
 
 void EstimatorInterface::setAirspeedData(uint64_t time_usec, float *true_airspeed, float *eas2tas)
 {
-	if (!collect_airspeed(time_usec, true_airspeed, eas2tas) || !_initialised) {
+	// do not take any airspeed samples if
+	// 1) there is an implementation for this in the derived class
+	// 2) filter is not yet initialised
+	// 3) we are on the ground
+	if (!collect_airspeed(time_usec, true_airspeed, eas2tas) || !_initialised || !_in_air) {
 		return;
 	}
 
