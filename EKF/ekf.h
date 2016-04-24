@@ -333,6 +333,24 @@ private:
 	// Control the filter fusion modes
 	void controlFusionModes();
 
+	// control fusion of external vision observations
+	void controlExternalVisionAiding();
+
+	// control fusion of optical flow observtions
+	void controlOpticalFlowAiding();
+
+	// control fusion of GPS observations
+	void controlGpsAiding();
+
+	// control fusion of height position observations
+	void controlHeightAiding();
+
+	// control fusino of magnetometer observations
+	void controlMagAiding();
+
+	// control for height sensor timeouts, sensor changes and state resets
+	void controlHeightSensorTimeouts();
+
 	// Determine if we are airborne or motors are armed
 	void calculateVehicleStatus();
 
