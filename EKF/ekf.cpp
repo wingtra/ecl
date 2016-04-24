@@ -74,7 +74,7 @@ Ekf::Ekf():
 	_last_gps_origin_time_us(0),
 	_gps_alt_ref(0.0f),
 	_hgt_counter(0),
-	_hgt_filt_state(0.0f),
+	_rng_filt_state(0.0f),
 	_mag_counter(0),
 	_time_last_mag(0),
 	_hgt_sensor_offset(0.0f),
@@ -85,7 +85,12 @@ Ekf::Ekf():
 	_baro_hgt_faulty(false),
 	_gps_hgt_faulty(false),
 	_rng_hgt_faulty(false),
-	_baro_hgt_offset(0.0f)
+	_baro_hgt_offset(0.0f),
+	_vert_pos_reset_delta(0.0f),
+	_time_vert_pos_reset(0),
+	_vert_vel_reset_delta(0.0f),
+	_time_vert_vel_reset(0),
+	_time_bad_vert_accel(0)
 {
 	_state = {};
 	_last_known_posNE.setZero();
@@ -107,6 +112,7 @@ Ekf::Ekf():
 	_delVel_sum = {};
 	_flow_gyro_bias = {};
 	_imu_del_ang_of = {};
+	_gps_check_fail_status.value = 0;
 }
 
 Ekf::~Ekf()
@@ -296,7 +302,6 @@ bool Ekf::update()
 				// correct position and height for offset relative to IMU
 				Vector3f pos_offset_body = _params.ev_pos_body - _params.imu_pos_body;
 				Vector3f pos_offset_earth = _R_to_earth * pos_offset_body;
-				warnx("pos_offset_earth %lf %lf %lf", (double)pos_offset_earth(0)*100, (double)pos_offset_earth(1)*100, (double)pos_offset_earth(2)*100);
 				_ev_sample_delayed.posNED(0) -= pos_offset_earth(0);
 				_ev_sample_delayed.posNED(1) -= pos_offset_earth(1);
 				_ev_sample_delayed.posNED(2) -= pos_offset_earth(2);
@@ -408,12 +413,12 @@ bool Ekf::initialiseFilter(void)
 				_control_status.flags.baro_hgt = false;
 				_control_status.flags.gps_hgt = false;
 				_control_status.flags.rng_hgt = true;
-				_hgt_filt_state = _range_sample_delayed.rng;
+				_rng_filt_state = _range_sample_delayed.rng;
 				_hgt_counter = 1;
 			} else if (_hgt_counter != 0) {
 				// increment the sample count and apply a LPF to the measurement
 				_hgt_counter ++;
-				_hgt_filt_state = 0.9f * _hgt_filt_state + 0.1f * _range_sample_delayed.rng;
+				_rng_filt_state = 0.9f * _rng_filt_state + 0.1f * _range_sample_delayed.rng;
 			}
 		}
 
@@ -426,12 +431,12 @@ bool Ekf::initialiseFilter(void)
 				_control_status.flags.baro_hgt = true;
 				_control_status.flags.gps_hgt = false;
 				_control_status.flags.rng_hgt = false;
-				_hgt_filt_state = _baro_sample_delayed.hgt;
+				_baro_hgt_offset = _baro_sample_delayed.hgt;
 				_hgt_counter = 1;
 			} else if (_hgt_counter != 0) {
 				// increment the sample count and apply a LPF to the measurement
 				_hgt_counter ++;
-				_hgt_filt_state = 0.9f * _hgt_filt_state + 0.1f * _baro_sample_delayed.hgt;
+				_baro_hgt_offset = 0.9f * _baro_hgt_offset + 0.1f * _baro_sample_delayed.hgt;
 			}
 		}
 
@@ -489,17 +494,12 @@ bool Ekf::initialiseFilter(void)
 		// calculate the initial magnetic field and yaw alignment
 		resetMagHeading(mag_init);
 
-		// calculate the averaged height reading to calulate the height of the origin
-		_hgt_sensor_offset = _hgt_filt_state;
-
-		// if we are not using the baro height as the primary source, then calculate an offset relative to the origin
-		// so it can be used as a backup
-		if (!_control_status.flags.baro_hgt) {
+		// if we are using the range finder as the primary source, then calculate the baro height at origin so  we can use baro as a backup
+		// so it can be used as a backup ad set the initial height using the range finder
+		if (_control_status.flags.rng_hgt) {
 			baroSample baro_newest = _baro_buffer.get_newest();
-			_baro_hgt_offset = baro_newest.hgt - _hgt_sensor_offset;
-
-		} else {
-			_baro_hgt_offset = 0.0f;
+			_baro_hgt_offset = baro_newest.hgt;
+			_state.pos(2) = -math::max(_rng_filt_state * _R_to_earth(2, 2),_params.rng_gnd_clearance);
 		}
 
 		// initialise the state covariance matrix
@@ -507,6 +507,13 @@ bool Ekf::initialiseFilter(void)
 
 		// initialise the terrain estimator
 		initHagl();
+
+		// reset the essential fusion timeout counters
+		_time_last_hgt_fuse = _time_last_imu;
+		_time_last_pos_fuse = _time_last_imu;
+		_time_last_vel_fuse = _time_last_imu;
+		_time_last_hagl_fuse = _time_last_imu;
+		_time_last_of_fuse = _time_last_imu;
 
 		return true;
 	}

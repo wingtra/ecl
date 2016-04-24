@@ -214,6 +214,18 @@ public:
 
 	virtual void get_accel_bias(float *bias) = 0;
 
+	// get EKF mode status
+	void get_control_mode(uint16_t *val)
+	{
+		*val = _control_status.value;
+	}
+
+	// get GPS check status
+	virtual void get_gps_check_status(uint16_t *val) = 0;
+
+	// return the amount the local vertical position changed in the last height reset and the time of the reset
+	virtual void get_vert_pos_reset(float *delta, uint64_t *time_us) = 0;
+
 protected:
 
 	parameters _params;		// filter parameters
