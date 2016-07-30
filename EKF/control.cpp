@@ -738,14 +738,11 @@ void Ekf::controlRangeFinderFusion()
 
 void Ekf::controlAirDataFusion()
 {
-	// TODO This is just to get the logic inside but we will only start fusion once we tested this again
-	//if (_tas_data_ready) {
-	if (false) {
+	if (_tas_data_ready) {
 		fuseAirspeed();
 
 	}
 
-	// control airspeed fusion - TODO move to a function
 	// if the airspeed measurements have timed out for 10 seconds we declare the wind estimate to be invalid
 	if (_time_last_imu - _time_last_arsp_fuse > 10e6 || _time_last_arsp_fuse == 0) {
 		_control_status.flags.wind = false;
