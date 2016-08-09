@@ -743,7 +743,9 @@ void Ekf::controlAirDataFusion()
 	if (_time_last_imu - _time_last_arsp_fuse > 10e6 || _time_last_arsp_fuse == 0) {
 		_control_status.flags.wind = false;
 
-	} else if (_tas_data_ready) {
+	}
+
+	if (_tas_data_ready) {
 		// if we have airspeed data to fuse and winds states are inactive, then
 		// they need to be activated and the corresponding states and covariances reset
 		if (!_control_status.flags.wind) {
@@ -752,14 +754,9 @@ void Ekf::controlAirDataFusion()
 			resetWindCovariance();
 		}
 
-	}
-
-	// always fuse airspeed if available and the wind states are active
-	if (_tas_data_ready && _control_status.flags.wind) {
 		fuseAirspeed();
-
+		
 	}
-
 }
 
 void Ekf::controlMagFusion()
