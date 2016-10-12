@@ -468,11 +468,6 @@ void Ekf::predictState()
 	matrix::Euler<float> to_hov(0.0, - PI/2, 0);
 	matrix::Dcm<float> To_hov(to_hov);
 	_R_to_earth_hov = _R_to_earth * To_hov;	
-	warnx("%5.2f %5.2f %5.2f ", (double)_R_to_earth_hov(0, 0), (double)_R_to_earth_hov(0, 1), (double)_R_to_earth_hov(0, 2));
-	warnx("%5.2f %5.2f %5.2f ", (double)_R_to_earth_hov(1, 0), (double)_R_to_earth_hov(1, 1), (double)_R_to_earth_hov(1, 2));
-	warnx("%5.2f %5.2f %5.2f ", (double)_R_to_earth_hov(2, 0), (double)_R_to_earth_hov(2, 1), (double)_R_to_earth_hov(2, 2));
-	warnx("  ");
-
 
 	// calculate the increment in velocity using the current orientation
 	_state.vel += _R_to_earth * corrected_delta_vel;
