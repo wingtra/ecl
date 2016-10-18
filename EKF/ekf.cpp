@@ -120,6 +120,7 @@ Ekf::Ekf():
 	_last_known_posNE.setZero();
 	_earth_rate_NED.setZero();
 	_R_to_earth = matrix::Dcm<float>();
+	_R_to_earth_hov = matrix::Dcm<float>();
 	memset(_vel_pos_innov, 0, sizeof(_vel_pos_innov));
 	memset(_mag_innov, 0, sizeof(_mag_innov));
 	memset(_flow_innov, 0, sizeof(_flow_innov));
@@ -384,6 +385,10 @@ bool Ekf::initialiseFilter(void)
 
 		// update transformation matrix from body to world frame
 		_R_to_earth = quat_to_invrotmat(_state.quat_nominal);
+		/* Rotate R by 90 deg pitch to transform to Wingtra body axis convention */
+		matrix::Euler<float> to_hov(0.0, - PI/2, 0);
+		matrix::Dcm<float> To_hov(to_hov);
+		_R_to_earth_hov = _R_to_earth * To_hov;
 
 		// calculate the averaged magnetometer reading
 		Vector3f mag_init = _mag_filt_state;
@@ -396,7 +401,7 @@ bool Ekf::initialiseFilter(void)
 			// so it can be used as a backup ad set the initial height using the range finder
 			baroSample baro_newest = _baro_buffer.get_newest();
 			_baro_hgt_offset = baro_newest.hgt;
-			_state.pos(2) = -math::max(_rng_filt_state * _R_to_earth(2, 2),_params.rng_gnd_clearance);
+			_state.pos(2) = -math::max(_rng_filt_state * _R_to_earth_hov(2, 2),_params.rng_gnd_clearance);
 			ECL_INFO("EKF using range finder height - commencing alignment");
 
 		} else if (_control_status.flags.ev_hgt) {
@@ -461,6 +466,10 @@ void Ekf::predictState()
 
 	// update transformation matrix from body to world frame
 	_R_to_earth = quat_to_invrotmat(_state.quat_nominal);
+	/* Rotate R by 90 deg pitch to transform to Wingtra body axis convention */
+	matrix::Euler<float> to_hov(0.0, - PI/2, 0);
+	matrix::Dcm<float> To_hov(to_hov);
+	_R_to_earth_hov = _R_to_earth * To_hov;	
 
 	// calculate the increment in velocity using the current orientation
 	_state.vel += _R_to_earth * corrected_delta_vel;
