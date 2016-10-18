@@ -214,6 +214,7 @@ private:
 	Vector3f _earth_rate_NED;	// earth rotation vector (NED) in rad/s
 
 	matrix::Dcm<float> _R_to_earth;	// transformation matrix from body frame to earth frame from last EKF predition
+	matrix::Dcm<float> _R_to_earth_hov;	// transformation matrix from body frame with unity at HOVER ideal regime to earth frame from last EKF predition
 
 	float P[_k_num_states][_k_num_states];	// state covariance matrix
 	float KH[_k_num_states][_k_num_states]; // intermediate variable for the covariance update
@@ -429,5 +430,11 @@ private:
 
 	// perform a limited reset of the magnetic field state covariances
 	void resetMagCovariance();
+
+	// perform a limited reset of the wind state covariances
+	void resetWindCovariance();
+
+	// perform a reset of the wind states
+	void resetWindStates();
 
 };

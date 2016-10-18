@@ -72,9 +72,9 @@ void Ekf::controlFusionModes()
 	_mag_data_ready = _mag_buffer.pop_first_older_than(_imu_sample_delayed.time_us, &_mag_sample_delayed);
 	_baro_data_ready = _baro_buffer.pop_first_older_than(_imu_sample_delayed.time_us, &_baro_sample_delayed);
 	_range_data_ready = _range_buffer.pop_first_older_than(_imu_sample_delayed.time_us, &_range_sample_delayed)
-			&& (_R_to_earth(2, 2) > 0.7071f);
+			&& (_R_to_earth_hov(2, 2) > 0.7071f);
 	_flow_data_ready = _flow_buffer.pop_first_older_than(_imu_sample_delayed.time_us, &_flow_sample_delayed)
-			&&  (_R_to_earth(2, 2) > 0.7071f);
+			&&  (_R_to_earth_hov(2, 2) > 0.7071f);
 	_ev_data_ready = _ext_vision_buffer.pop_first_older_than(_imu_sample_delayed.time_us, &_ev_sample_delayed);
 	_tas_data_ready = _airspeed_buffer.pop_first_older_than(_imu_sample_delayed.time_us, &_airspeed_sample_delayed);
 
@@ -227,7 +227,7 @@ void Ekf::controlOpticalFlowFusion()
 					float heightAboveGndEst = fmaxf((_terrain_vpos - _state.pos(2)), _params.rng_gnd_clearance);
 
 					// calculate absolute distance from focal point to centre of frame assuming a flat earth
-					float range = heightAboveGndEst / _R_to_earth(2, 2);
+					float range = heightAboveGndEst / _R_to_earth_hov(2, 2);
 
 					if ((range - _params.rng_gnd_clearance) > 0.3f && _flow_sample_delayed.dt > 0.05f) {
 						// we should have reliable OF measurements so
@@ -708,7 +708,7 @@ void Ekf::controlRangeFinderFusion()
 		// correct the range data for position offset relative to the IMU
 		Vector3f pos_offset_body = _params.rng_pos_body - _params.imu_pos_body;
 		Vector3f pos_offset_earth = _R_to_earth * pos_offset_body;
-		_range_sample_delayed.rng += pos_offset_earth(2) / _R_to_earth(2, 2);
+		_range_sample_delayed.rng += pos_offset_earth(2) / _R_to_earth_hov(2, 2);
 
 		// always fuse available range finder data into a terrain height estimator if the estimator has been initialised
 		if (_terrain_initialised) {
@@ -738,18 +738,24 @@ void Ekf::controlRangeFinderFusion()
 
 void Ekf::controlAirDataFusion()
 {
-	if (_tas_data_ready) {
-		fuseAirspeed();
-
-	}
-
-	// if the airspeed measurements have timed out for 10 seconds we declare the wind estimate to be invalid
+	// control activation and initialisation/reset of wind states
+	// wind states are required to do airspeed fusion
 	if (_time_last_imu - _time_last_arsp_fuse > 10e6 || _time_last_arsp_fuse == 0) {
 		_control_status.flags.wind = false;
 
-	} else {
-		_control_status.flags.wind = true;
+	}
 
+	if (_tas_data_ready) {
+		// if we have airspeed data to fuse and winds states are inactive, then
+		// they need to be activated and the corresponding states and covariances reset
+		if (!_control_status.flags.wind) {
+			_control_status.flags.wind = true;
+			resetWindStates();
+			resetWindCovariance();
+		}
+
+		fuseAirspeed();
+		
 	}
 }
 
