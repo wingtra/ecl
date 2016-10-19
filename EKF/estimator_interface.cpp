@@ -248,6 +248,18 @@ void EstimatorInterface::setRangeData(uint64_t time_usec, float *data)
 		_time_last_range = time_usec;
 
 		_range_buffer.push(range_sample_new);
+
+		// Check time of oldest data and declare data as continuous if the average rate is greater than 5Hz
+		rangeSample oldest_data = _range_buffer.get_oldest();
+		uint64_t buffer_age_us = _time_last_imu - oldest_data.time_us;
+		if ((buffer_age_us > 1) && (oldest_data.time_us > 0)) {
+			float data_rate_uHz = (float)(_range_buffer.get_length() - 1) / (float)buffer_age_us;
+			if (data_rate_uHz > 5e-6f) {
+				_range_data_continuous = true;
+			} else {
+				_range_data_continuous = false;
+			}
+		}
 	}
 }
 

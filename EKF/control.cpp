@@ -717,7 +717,6 @@ void Ekf::controlRangeFinderFusion()
 		// always fuse available range finder data into a terrain height estimator if the estimator has been initialised
 		if (_terrain_initialised) {
 			fuseHagl();
-
 		}
 
 		// only use range finder as a height observation in the main filter if specifically enabled

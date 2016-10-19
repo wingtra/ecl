@@ -47,7 +47,8 @@ bool Ekf::initHagl()
 	// get most recent range measurement from buffer
 	rangeSample latest_measurement = _range_buffer.get_newest();
 
-	if ((_time_last_imu - latest_measurement.time_us) < 2e5 && _R_to_earth(2,2) > 0.7071f) {
+	// If we are in the air then we require fresh data, tilt within limits and continuous data to initialise the filter
+	if ((_time_last_imu - latest_measurement.time_us) < 2e5 && _R_to_earth(2,2) > 0.7071f && _range_data_continuous) {
 		// if we have a fresh measurement, use it to initialise the terrain estimator
 		_terrain_vpos = _state.pos(2) + latest_measurement.rng * _R_to_earth(2, 2);
 		// initialise state variance to variance of measurement
@@ -138,11 +139,29 @@ bool Ekf::get_terrain_vert_pos(float *ret)
 	// The height is useful if the uncertainty in terrain height is significantly smaller than than the estimated height above terrain
 	bool accuracy_useful = (sqrtf(_terrain_var) < 0.2f * fmaxf((_terrain_vpos - _state.pos(2)), _params.rng_gnd_clearance));
 
-	if (_time_last_imu - _time_last_hagl_fuse < 1e6 || accuracy_useful) {
+	if (_terrain_initialised && accuracy_useful) {
 		return true;
 
 	} else {
 		return false;
+
+	}
+}
+
+// return true if the estimate is valid
+// return the estimated terrain vertical position 1-std error in m
+bool Ekf::get_terrain_vert_err(float *ret)
+{
+	float temp = sqrtf(_terrain_var);
+	memcpy(ret, &temp, sizeof(float));
+
+	// the estimator must be initialised to provide a valid variance
+	if (_terrain_initialised) {
+		return true;
+
+	} else {
+		return false;
+
 	}
 }
 
