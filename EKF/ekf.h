@@ -173,6 +173,7 @@ private:
 	static const uint8_t _k_num_states = 24;
 	static const float _k_earth_rate;
 	static const float _gravity_mss;
+	static const float _pi_div_2;
 
 	// reset event monitoring
 	// structure containing velocity, position, height and yaw reset information

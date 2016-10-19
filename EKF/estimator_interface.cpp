@@ -60,6 +60,7 @@ EstimatorInterface::EstimatorInterface():
 	_yaw_test_ratio(0.0f),
 	_tas_test_ratio(0.0f),
 	_terr_test_ratio(0.0f),
+	_range_data_continuous(false),
 	_time_last_imu(0),
 	_time_last_gps(0),
 	_time_last_mag(0),

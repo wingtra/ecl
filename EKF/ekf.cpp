@@ -60,6 +60,7 @@
 
 const float Ekf::_k_earth_rate = 0.000072921f;
 const float Ekf::_gravity_mss = 9.80665f;
+const float Ekf::_pi_div_2 = 1.570796f;
 
 Ekf::Ekf():
 	_filter_initialised(false),
@@ -384,7 +385,7 @@ bool Ekf::initialiseFilter(void)
 		// update transformation matrix from body to world frame
 		_R_to_earth = quat_to_invrotmat(_state.quat_nominal);
 		/* Rotate R by 90 deg pitch to transform to Wingtra body axis convention */
-		matrix::Euler<float> to_hov(0.0, - PI/2, 0);
+		matrix::Euler<float> to_hov(0.0f, - _pi_div_2, 0.0f);
 		matrix::Dcm<float> To_hov(to_hov);
 		_R_to_earth_hov = _R_to_earth * To_hov;
 
@@ -465,7 +466,7 @@ void Ekf::predictState()
 	// update transformation matrix from body to world frame
 	_R_to_earth = quat_to_invrotmat(_state.quat_nominal);
 	/* Rotate R by 90 deg pitch to transform to Wingtra body axis convention */
-	matrix::Euler<float> to_hov(0.0, - PI/2, 0);
+	matrix::Euler<float> to_hov(0.0f, - _pi_div_2, 0.0f);
 	matrix::Dcm<float> To_hov(to_hov);
 	_R_to_earth_hov = _R_to_earth * To_hov;	
 
