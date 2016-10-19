@@ -153,8 +153,12 @@ public:
 	virtual bool global_position_is_valid() = 0;
 
 	// return true if the estimate is valid
-	// return the estimated terrain vertical position relative to the NED origin
+	// return the estimated terrain vertical position relative to the NED origin in m
 	virtual bool get_terrain_vert_pos(float *ret) = 0;
+
+	// return true if the estimate is valid
+	// return the estimated terrain vertical position 1-std error in m
+	virtual bool get_terrain_vert_err(float *ret) = 0;
 
 	// return true if the local position estimate is valid
 	bool local_position_is_valid();
@@ -292,6 +296,8 @@ protected:
 	float _tas_test_ratio;		// tas innovation consistency check ratio
 	float _terr_test_ratio;		// height above terrain measurement innovation consistency check ratio
 	innovation_fault_status_u _innov_check_fail_status;
+
+	bool _range_data_continuous;	// true when we are getting continuous data from the range finder
 
 	// data buffer instances
 	RingBuffer<imuSample> _imu_buffer;

@@ -124,6 +124,10 @@ public:
 	// return the estimated terrain vertical position relative to the NED origin
 	bool get_terrain_vert_pos(float *ret);
 
+	// return true if the estimate is valid
+	// return the estimated terrain vertical position 1-std error in m
+	bool get_terrain_vert_err(float *ret);
+
 	// get the accerometer bias in m/s/s
 	void get_accel_bias(float bias[3]);
 

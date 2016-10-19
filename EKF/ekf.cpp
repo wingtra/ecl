@@ -214,7 +214,15 @@ bool Ekf::update()
 			_terrain_initialised = initHagl();
 
 		} else {
-			predictHagl();
+			// declare the terrain estimator uninitialised if too long without
+			// fusiong data to force a reset when valid data is available
+			if ((_time_last_imu - _time_last_hagl_fuse) > 10e6) {
+				_terrain_initialised = false;
+
+			} else {
+				predictHagl();
+
+			}
 		}
 
 		// control fusion of observation data
