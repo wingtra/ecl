@@ -209,6 +209,14 @@ bool Ekf::update()
 		predictState();
 		predictCovariance();
 
+
+		// update range data contineous flag (5Hz ie 200 us)
+		if ((_time_last_imu - _time_last_setRange) < 200) {
+			_range_data_continuous = true;
+		} else {
+			_range_data_continuous = false;
+		}
+
 		// perform state and variance prediction for the terrain estimator
 		if (!_terrain_initialised) {
 			_terrain_initialised = initHagl();

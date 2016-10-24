@@ -66,6 +66,7 @@ EstimatorInterface::EstimatorInterface():
 	_time_last_mag(0),
 	_time_last_baro(0),
 	_time_last_range(0),
+	_time_last_setRange(0),
 	_time_last_airspeed(0),
 	_time_last_ext_vision(0),
 	_mag_declination_gps(0.0f),
@@ -249,6 +250,8 @@ void EstimatorInterface::setRangeData(uint64_t time_usec, float *data)
 
 		_range_buffer.push(range_sample_new);
 
+		/* Moved calculation to ekf main loop.
+		 *
 		// Check time of oldest data and declare data as continuous if the average rate is greater than 5Hz
 		rangeSample oldest_data = _range_buffer.get_oldest();
 		uint64_t buffer_age_us = _time_last_imu - oldest_data.time_us;
@@ -260,6 +263,8 @@ void EstimatorInterface::setRangeData(uint64_t time_usec, float *data)
 				_range_data_continuous = false;
 			}
 		}
+		*/
+		_time_last_setRange = time_usec;
 	}
 }
 
@@ -394,6 +399,7 @@ bool EstimatorInterface::initialise_interface(uint64_t timestamp)
 	_time_last_mag = 0;
 	_time_last_baro = 0;
 	_time_last_range = 0;
+	_time_last_setRange = 0;
 	_time_last_airspeed = 0;
 	_time_last_optflow = 0;
 	memset(&_fault_status.flags, 0, sizeof(_fault_status.flags));
