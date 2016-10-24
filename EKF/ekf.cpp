@@ -210,8 +210,8 @@ bool Ekf::update()
 		predictCovariance();
 
 
-		// update range data contineous flag (5Hz ie 200 us)
-		if ((_time_last_imu - _time_last_setRange) < 200) {
+		// update range data contineous flag (5Hz ie 200 ms)
+		if ((_time_last_imu - _time_last_range) < 02e05) {
 			_range_data_continuous = true;
 		} else {
 			_range_data_continuous = false;

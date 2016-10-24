@@ -66,7 +66,6 @@ EstimatorInterface::EstimatorInterface():
 	_time_last_mag(0),
 	_time_last_baro(0),
 	_time_last_range(0),
-	_time_last_setRange(0),
 	_time_last_airspeed(0),
 	_time_last_ext_vision(0),
 	_mag_declination_gps(0.0f),
@@ -264,7 +263,6 @@ void EstimatorInterface::setRangeData(uint64_t time_usec, float *data)
 			}
 		}
 		*/
-		_time_last_setRange = time_usec;
 	}
 }
 
@@ -399,7 +397,6 @@ bool EstimatorInterface::initialise_interface(uint64_t timestamp)
 	_time_last_mag = 0;
 	_time_last_baro = 0;
 	_time_last_range = 0;
-	_time_last_setRange = 0;
 	_time_last_airspeed = 0;
 	_time_last_optflow = 0;
 	memset(&_fault_status.flags, 0, sizeof(_fault_status.flags));

@@ -315,7 +315,6 @@ protected:
 	uint64_t _time_last_mag;	// timestamp of last magnetometer measurement in microseconds
 	uint64_t _time_last_baro;	// timestamp of last barometer measurement in microseconds
 	uint64_t _time_last_range;	// timestamp of last range measurement in microseconds
-	uint64_t _time_last_setRange;	// timestamp of last range measurement received by ECL in microseconds
 	uint64_t _time_last_airspeed;	// timestamp of last airspeed measurement in microseconds
 	uint64_t _time_last_ext_vision; // timestamp of last external vision measurement in microseconds
 	uint64_t _time_last_optflow;

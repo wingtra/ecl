@@ -139,7 +139,7 @@ bool Ekf::get_terrain_vert_pos(float *ret)
 	// The height is useful if the uncertainty in terrain height is significantly smaller than than the estimated height above terrain
 	bool accuracy_useful = (sqrtf(_terrain_var) < 0.2f * fmaxf((_terrain_vpos - _state.pos(2)), _params.rng_gnd_clearance));
 
-	if (_terrain_initialised && accuracy_useful) {
+	if (_terrain_initialised && accuracy_useful && _range_data_continuous) {
 		return true;
 
 	} else {
