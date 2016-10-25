@@ -211,6 +211,18 @@ bool Ekf::update()
 
 
 		// update range data contineous flag (5Hz ie 200 ms)
+		/* Timing */
+		static hrt_abstime t = 0;
+		static hrt_abstime t_prev = 0;
+		static float dt = 0.0f;
+		t = hrt_absolute_time();
+		dt = t_prev != 0 ? (t - t_prev) * 0.000001f : 0.0f;
+		t_prev = t;
+
+		static float range_update_interval = 0.0f;
+		/* Implement 1/2 sec low pass filter over the square of difference of readings */
+		range_update_interval = range_update_interval * (1 - 2.0f * dt) + 2.0f * dt * (_time_last_imu - _time_last_range);
+
 		if ((_time_last_imu - _time_last_range) < 02e05) {
 			_range_data_continuous = true;
 		} else {
