@@ -250,6 +250,9 @@ public:
 	// return a bitmask integer that describes which state estimates can be used for flight control
 	virtual void get_ekf_soln_status(uint16_t *status) = 0;
 
+	// returns a bitmask integer that describes which observations are rejected
+	void get_innovation_fault_status(uint16_t *value);
+
 protected:
 
 	parameters _params;		// filter parameters

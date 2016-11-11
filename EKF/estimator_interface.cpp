@@ -425,3 +425,8 @@ bool EstimatorInterface::local_position_is_valid()
 		(((_time_last_imu - _time_last_ext_vision) < 5e6) && _control_status.flags.ev_pos) || 
 		global_position_is_valid();
 }
+
+void EstimatorInterface::get_innovation_fault_status(uint16_t *value)
+{
+	*value = _innov_check_fail_status.value;
+}
