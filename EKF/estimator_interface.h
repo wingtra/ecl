@@ -44,6 +44,7 @@
 #include "RingBuffer.h"
 #include "geo.h"
 #include "common.h"
+#include "mathlib.h"
 
 using namespace estimator;
 class EstimatorInterface
@@ -84,6 +85,8 @@ public:
 
 	virtual void get_state_delayed(float *state) = 0;
 
+	virtual void get_wind_velocity(float *wind) = 0;
+
 	virtual void get_covariances(float *covariances) = 0;
 
 	// get the ekf WGS-84 origin position and height and the system time it was last set
@@ -111,17 +114,8 @@ public:
 	// ask estimator for sensor data collection decision and do any preprocessing if required, returns true if not defined
 	virtual bool collect_gps(uint64_t time_usec, struct gps_message *gps) { return true; }
 
+	// accumulate and downsample IMU data to the EKF prediction rate
 	virtual bool collect_imu(imuSample &imu) { return true; }
-
-	virtual bool collect_mag(uint64_t time_usec, float *data) { return true; }
-
-	virtual bool collect_baro(uint64_t time_usec, float *data) { return true; }
-
-	virtual bool collect_airspeed(uint64_t time_usec, float *true_airspeed, float *eas2tas) { return true; }
-
-	virtual bool collect_range(uint64_t time_usec, float *data) { return true; }
-
-	virtual bool collect_opticalflow(uint64_t time_usec, flow_message *flow) { return true; }
 
 	// set delta angle imu data
 	void setIMUData(uint64_t time_usec, uint64_t delta_ang_dt, uint64_t delta_vel_dt, float *delta_ang, float *delta_vel);
@@ -145,6 +139,9 @@ public:
 	// set optical flow data
 	void setOpticalFlowData(uint64_t time_usec, flow_message *flow);
 
+	// set external vision position and attitude data
+	void setExtVisionData(uint64_t time_usec, ext_vision_message *evdata);
+
 	// return a address to the parameters struct
 	// in order to give access to the application
 	parameters *getParamHandle() {return &_params;}
@@ -156,8 +153,12 @@ public:
 	virtual bool global_position_is_valid() = 0;
 
 	// return true if the estimate is valid
-	// return the estimated terrain vertical position relative to the NED origin
+	// return the estimated terrain vertical position relative to the NED origin in m
 	virtual bool get_terrain_vert_pos(float *ret) = 0;
+
+	// return true if the estimate is valid
+	// return the estimated terrain vertical position 1-std error in m
+	virtual bool get_terrain_vert_err(float *ret) = 0;
 
 	// return true if the local position estimate is valid
 	bool local_position_is_valid();
@@ -207,6 +208,7 @@ public:
 	}
 
 	virtual void get_accel_bias(float bias[3]) = 0;
+	virtual void get_gyro_bias(float bias[3]) = 0;
 
 	// get EKF mode status
 	void get_control_mode(uint16_t *val)
@@ -223,8 +225,30 @@ public:
 	// get GPS check status
 	virtual void get_gps_check_status(uint16_t *val) = 0;
 
-	// return the amount the local vertical position changed in the last height reset and the time of the reset
-	virtual void get_vert_pos_reset(float *delta, uint64_t *time_us) = 0;
+	// return the amount the local vertical position changed in the last reset and the number of reset events
+	virtual void get_posD_reset(float *delta, uint8_t *counter) = 0;
+
+	// return the amount the local vertical velocity changed in the last reset and the number of reset events
+	virtual void get_velD_reset(float *delta, uint8_t *counter) = 0;
+
+	// return the amount the local horizontal position changed in the last reset and the number of reset events
+	virtual void get_posNE_reset(float delta[2], uint8_t *counter) = 0;
+
+	// return the amount the local horizontal velocity changed in the last reset and the number of reset events
+	virtual void get_velNE_reset(float delta[2], uint8_t *counter) = 0;
+
+	// return the amount the quaternion has changed in the last reset and the number of reset events
+	virtual void get_quat_reset(float delta_quat[4], uint8_t *counter) = 0;
+
+	// get EKF innovation consistency check status information comprising of:
+	// status - a bitmask integer containing the pass/fail status for each EKF measurement innovation consistency check
+	// Innovation Test Ratios - these are the ratio of the innovation to the acceptance threshold.
+	// A value > 1 indicates that the sensor measurement has exceeded the maximum acceptable level and has been rejected by the EKF
+	// Where a measurement type is a vector quantity, eg magnetoemter, GPS position, etc, the maximum value is returned.
+	virtual void get_innovation_test_status(uint16_t *status, float *mag, float *vel, float *pos, float *hgt, float *tas, float *hagl) = 0;
+
+	// return a bitmask integer that describes which state estimates can be used for flight control
+	virtual void get_ekf_soln_status(uint16_t *status) = 0;
 
 protected:
 
@@ -232,7 +256,9 @@ protected:
 
 	static const uint8_t OBS_BUFFER_LENGTH = 10;	// defines how many measurement samples we can buffer
 	static const uint8_t IMU_BUFFER_LENGTH = 30;	// defines how many imu samples we can buffer
-	static const unsigned FILTER_UPDATE_PERRIOD_MS = 10;	// ekf prediction period in milliseconds
+	static const unsigned FILTER_UPDATE_PERIOD_MS = 10;	// ekf prediction period in milliseconds
+
+	unsigned _min_obs_interval_us; // minimum time interval between observations that will guarantee data is not lost (usec)
 
 	float _dt_imu_avg;	// average imu update period in s
 
@@ -245,6 +271,7 @@ protected:
 	rangeSample _range_sample_delayed;
 	airspeedSample _airspeed_sample_delayed;
 	flowSample _flow_sample_delayed;
+	extVisionSample _ev_sample_delayed;
 
 	outputSample _output_sample_delayed;	// filter output on the delayed time horizon
 	outputSample _output_new;	// filter output on the non-delayed time horizon
@@ -256,18 +283,21 @@ protected:
 	bool _imu_updated;      // true if the ekf should update (completed downsampling process)
 	bool _initialised;      // true if the ekf interface instance (data buffering) is initialized
 
-	bool _NED_origin_initialised = false;
-	bool _gps_speed_valid = false;
-	float _gps_origin_eph = 0.0f; // horizontal position uncertainty of the GPS origin
-	float _gps_origin_epv = 0.0f; // vertical position uncertainty of the GPS origin
-	struct map_projection_reference_s _pos_ref = {};    // Contains WGS-84 position latitude and longitude (radians)
+	bool _NED_origin_initialised;
+	bool _gps_speed_valid;
+	float _gps_origin_eph; // horizontal position uncertainty of the GPS origin
+	float _gps_origin_epv; // vertical position uncertainty of the GPS origin
+	struct map_projection_reference_s _pos_ref;    // Contains WGS-84 position latitude and longitude (radians)
 
-	bool _mag_healthy;              // computed by mag innovation test
-	bool _airspeed_healthy;			// computed by airspeed innovation test
+	// innovation consistency check monitoring ratios
 	float _yaw_test_ratio;          // yaw innovation consistency check ratio
 	float _mag_test_ratio[3];       // magnetometer XYZ innovation consistency check ratios
 	float _vel_pos_test_ratio[6];   // velocity and position innovation consistency check ratios
-	float _tas_test_ratio;			// tas innovation consistency check ratio
+	float _tas_test_ratio;		// tas innovation consistency check ratio
+	float _terr_test_ratio;		// height above terrain measurement innovation consistency check ratio
+	innovation_fault_status_u _innov_check_fail_status;
+
+	bool _range_data_continuous;	// true when we are getting continuous data from the range finder
 
 	// data buffer instances
 	RingBuffer<imuSample> _imu_buffer;
@@ -277,6 +307,7 @@ protected:
 	RingBuffer<rangeSample> _range_buffer;
 	RingBuffer<airspeedSample> _airspeed_buffer;
 	RingBuffer<flowSample> 	_flow_buffer;
+	RingBuffer<extVisionSample> _ext_vision_buffer;
 	RingBuffer<outputSample> _output_buffer;
 
 	uint64_t _time_last_imu;	// timestamp of last imu sample in microseconds
@@ -285,6 +316,7 @@ protected:
 	uint64_t _time_last_baro;	// timestamp of last barometer measurement in microseconds
 	uint64_t _time_last_range;	// timestamp of last range measurement in microseconds
 	uint64_t _time_last_airspeed;	// timestamp of last airspeed measurement in microseconds
+	uint64_t _time_last_ext_vision; // timestamp of last external vision measurement in microseconds
 	uint64_t _time_last_optflow;
 
 	fault_status_u _fault_status;

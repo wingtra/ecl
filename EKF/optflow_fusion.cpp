@@ -402,9 +402,23 @@ void Ekf::fuseOptFlow()
 		}
 	}
 
-	// if either axis fails, we fail the sensor
-	if (optflow_test_ratio[0] > 1.0f || optflow_test_ratio[1] > 1.0f) {
+	// record the innovation test pass/fail
+	bool flow_fail = false;
+	for (uint8_t obs_index = 0; obs_index <= 1; obs_index++) {
+		if (optflow_test_ratio[obs_index] > 1.0f) {
+			flow_fail = true;
+			_innov_check_fail_status.value |= (1 << (obs_index + 9));
+
+		} else {
+			_innov_check_fail_status.value &= ~(1 << (obs_index + 9));
+
+		}
+	}
+
+	// if either axis fails we abort the fusion
+	if (flow_fail) {
 		return;
+
 	}
 
 	for (uint8_t obs_index = 0; obs_index <= 1; obs_index++) {
@@ -508,30 +522,28 @@ void Ekf::calcOptFlowBias()
 
 	// if accumulation time differences are not excessive and accumulation time is adequate
 	// compare the optical flow and and navigation rate data and calculate a bias error
-	if (_fuse_flow) {
-		if ((fabsf(_delta_time_of - _flow_sample_delayed.dt) < 0.05f) && (_delta_time_of > 0.01f)
-		    && (_flow_sample_delayed.dt > 0.01f)) {
-			// calculate a reference angular rate
-			Vector3f reference_body_rate;
-			reference_body_rate = _imu_del_ang_of * (1.0f / _delta_time_of);
+	if ((fabsf(_delta_time_of - _flow_sample_delayed.dt) < 0.05f) && (_delta_time_of > 0.01f)
+	    && (_flow_sample_delayed.dt > 0.01f)) {
+		// calculate a reference angular rate
+		Vector3f reference_body_rate;
+		reference_body_rate = _imu_del_ang_of * (1.0f / _delta_time_of);
 
-			// calculate the optical flow sensor measured body rate
-			Vector3f of_body_rate;
-			of_body_rate = _flow_sample_delayed.gyroXYZ * (1.0f / _flow_sample_delayed.dt);
+		// calculate the optical flow sensor measured body rate
+		Vector3f of_body_rate;
+		of_body_rate = _flow_sample_delayed.gyroXYZ * (1.0f / _flow_sample_delayed.dt);
 
-			// calculate the bias estimate using  a combined LPF and spike filter
-			_flow_gyro_bias(0) = 0.99f * _flow_gyro_bias(0) + 0.01f * math::constrain((of_body_rate(0) - reference_body_rate(0)),
-					     -0.1f, 0.1f);
-			_flow_gyro_bias(1) = 0.99f * _flow_gyro_bias(1) + 0.01f * math::constrain((of_body_rate(1) - reference_body_rate(1)),
-					     -0.1f, 0.1f);
-			_flow_gyro_bias(2) = 0.99f * _flow_gyro_bias(2) + 0.01f * math::constrain((of_body_rate(2) - reference_body_rate(2)),
-					     -0.1f, 0.1f);
-		}
-
-		// reset the accumulators
-		_imu_del_ang_of.setZero();
-		_delta_time_of = 0.0f;
+		// calculate the bias estimate using  a combined LPF and spike filter
+		_flow_gyro_bias(0) = 0.99f * _flow_gyro_bias(0) + 0.01f * math::constrain((of_body_rate(0) - reference_body_rate(0)),
+				     -0.1f, 0.1f);
+		_flow_gyro_bias(1) = 0.99f * _flow_gyro_bias(1) + 0.01f * math::constrain((of_body_rate(1) - reference_body_rate(1)),
+				     -0.1f, 0.1f);
+		_flow_gyro_bias(2) = 0.99f * _flow_gyro_bias(2) + 0.01f * math::constrain((of_body_rate(2) - reference_body_rate(2)),
+				     -0.1f, 0.1f);
 	}
+
+	// reset the accumulators
+	_imu_del_ang_of.setZero();
+	_delta_time_of = 0.0f;
 }
 
 // calculate the measurement variance for the optical flow sensor (rad/sec)^2

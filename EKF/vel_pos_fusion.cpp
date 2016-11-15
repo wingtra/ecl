@@ -46,7 +46,7 @@
 
 void Ekf::fuseVelPosHeight()
 {
-	bool fuse_map[6] = {}; // map of booelans true when [VN,VE,VD,PN,PE,PD] observations are available
+	bool fuse_map[6] = {}; // map of booleans true when [VN,VE,VD,PN,PE,PD] observations are available
 	bool innov_check_pass_map[6] = {}; // true when innovations consistency checks pass for [VN,VE,VD,PN,PE,PD] observations
 	float R[6] = {}; // observation variances for [VN,VE,VD,PN,PE,PD]
 	float gate_size[6] = {}; // innovation consistency check gate sizes for [VN,VE,VD,PN,PE,PD] observations
@@ -83,32 +83,52 @@ void Ekf::fuseVelPosHeight()
 
 	if (_fuse_pos) {
 		fuse_map[3] = fuse_map[4] = true;
-		// horizontal position innovations
-		_vel_pos_innov[3] = _state.pos(0) - _gps_sample_delayed.pos(0);
-		_vel_pos_innov[4] = _state.pos(1) - _gps_sample_delayed.pos(1);
 
-		// observation variance - user parameter defined
-		// if we are in flight and not using GPS, then use a specific parameter
-		if (!_control_status.flags.gps) {
-			if (_control_status.flags.in_air) {
-				R[3] = fmaxf(_params.pos_noaid_noise, _params.gps_pos_noise);
-
-			} else {
-				R[3] = _params.gps_pos_noise;
-			}
-
-		} else {
+		// Calculate innovations and observation variance depending on type of observations
+		// being used
+		if (_control_status.flags.gps) {
+			// we are using GPS measurements
 			float lower_limit = fmaxf(_params.gps_pos_noise, 0.01f);
 			float upper_limit = fmaxf(_params.pos_noaid_noise, lower_limit);
 			R[3] = math::constrain(_gps_sample_delayed.hacc, lower_limit, upper_limit);
+			_vel_pos_innov[3] = _state.pos(0) - _gps_sample_delayed.pos(0);
+			_vel_pos_innov[4] = _state.pos(1) - _gps_sample_delayed.pos(1);
+
+			// innovation gate size
+			gate_size[3] = fmaxf(_params.posNE_innov_gate, 1.0f);
+
+
+		} else if (_control_status.flags.ev_pos) {
+			// we are using external vision measurements
+			R[3] = fmaxf(_ev_sample_delayed.posErr, 0.01f);
+			_vel_pos_innov[3] = _state.pos(0) - _ev_sample_delayed.posNED(0);
+			_vel_pos_innov[4] = _state.pos(1) - _ev_sample_delayed.posNED(1);
+
+			// innovation gate size
+			gate_size[3] = fmaxf(_params.ev_innov_gate, 1.0f);
+
+		} else {
+			// No observations - use a static position to constrain drift
+			if (_control_status.flags.in_air && _control_status.flags.tilt_align) {
+				R[3] = fmaxf(_params.pos_noaid_noise, _params.gps_pos_noise);
+			} else {
+				R[3] = 0.5f;
+			}
+			_vel_pos_innov[3] = _state.pos(0) - _last_known_posNE(0);
+			_vel_pos_innov[4] = _state.pos(1) - _last_known_posNE(1);
+
+			// glitch protection is not required so set gate to a large value
+			gate_size[3] = 100.0f;
 
 		}
 
+		// convert North position noise to variance
 		R[3] = R[3] * R[3];
+
+		// copy North axis values to East axis
 		R[4] = R[3];
-		// innovation gate sizes
-		gate_size[3] = fmaxf(_params.posNE_innov_gate, 1.0f);
 		gate_size[4] = gate_size[3];
+
 	}
 
 	if (_fuse_height) {
@@ -135,16 +155,24 @@ void Ekf::fuseVelPosHeight()
 			// innovation gate size
 			gate_size[5] = fmaxf(_params.baro_innov_gate, 1.0f);
 
-		} else if (_control_status.flags.rng_hgt && (_R_to_earth(2, 2) > 0.7071f)) {
+		} else if (_control_status.flags.rng_hgt && (_R_to_earth_hov(2, 2) > 0.7071f)) {
 			fuse_map[5] = true;
 			// use range finder with tilt correction
-			_vel_pos_innov[5] = _state.pos(2) - (-math::max(_range_sample_delayed.rng * _R_to_earth(2, 2),
+			_vel_pos_innov[5] = _state.pos(2) - (-math::max(_range_sample_delayed.rng * _R_to_earth_hov(2, 2),
 							     _params.rng_gnd_clearance));
 			// observation variance - user parameter defined
-			R[5] = fmaxf(_params.range_noise, 0.01f);
-			R[5] = R[5] * R[5];
+			R[5] = fmaxf((sq(_params.range_noise) + sq(_params.range_noise_scaler * _range_sample_delayed.rng)) * sq(_R_to_earth_hov(2, 2)), 0.01f);
 			// innovation gate size
 			gate_size[5] = fmaxf(_params.range_innov_gate, 1.0f);
+		} else if (_control_status.flags.ev_hgt) {
+			fuse_map[5] = true;
+			// calculate the innovation assuming the external vision observaton is in local NED frame
+			_vel_pos_innov[5] = _state.pos(2) - _ev_sample_delayed.posNED(2);
+			// observation variance - defined externally
+			R[5] = fmaxf(_ev_sample_delayed.posErr, 0.01f);
+			R[5] = R[5] * R[5];
+			// innovation gate size
+			gate_size[5] = fmaxf(_params.ev_innov_gate, 1.0f);
 		}
 
 	}
@@ -168,25 +196,32 @@ void Ekf::fuseVelPosHeight()
 	bool vel_check_pass = (_vel_pos_test_ratio[0] <= 1.0f) && (_vel_pos_test_ratio[1] <= 1.0f)
 			      && (_vel_pos_test_ratio[2] <= 1.0f);
 	innov_check_pass_map[2] = innov_check_pass_map[1] = innov_check_pass_map[0] = vel_check_pass;
-	bool using_synthetic_measurements = !_control_status.flags.gps && !_control_status.flags.opt_flow;
-	bool pos_check_pass = ((_vel_pos_test_ratio[3] <= 1.0f) && (_vel_pos_test_ratio[4] <= 1.0f))
-			      || using_synthetic_measurements || !_control_status.flags.tilt_align;
+	bool pos_check_pass = ((_vel_pos_test_ratio[3] <= 1.0f) && (_vel_pos_test_ratio[4] <= 1.0f)) || !_control_status.flags.tilt_align;
 	innov_check_pass_map[4] = innov_check_pass_map[3] = pos_check_pass;
 	innov_check_pass_map[5] = (_vel_pos_test_ratio[5] <= 1.0f) || !_control_status.flags.tilt_align;
 
-	// record the successful velocity fusion time
+	// record the successful velocity fusion event
 	if (vel_check_pass && _fuse_hor_vel) {
 		_time_last_vel_fuse = _time_last_imu;
+		_innov_check_fail_status.flags.reject_vel_NED = false;
+	} else if (!vel_check_pass) {
+		_innov_check_fail_status.flags.reject_vel_NED = true;
 	}
 
-	// record the successful position fusion time
+	// record the successful position fusion event
 	if (pos_check_pass && _fuse_pos) {
 		_time_last_pos_fuse = _time_last_imu;
+		_innov_check_fail_status.flags.reject_pos_NE = false;
+	} else if (!pos_check_pass) {
+		_innov_check_fail_status.flags.reject_pos_NE = true;
 	}
 
-	// record the successful height fusion time
+	// record the successful height fusion event
 	if (innov_check_pass_map[5] && _fuse_height) {
 		_time_last_hgt_fuse = _time_last_imu;
+		_innov_check_fail_status.flags.reject_pos_D = false;
+	} else if (!innov_check_pass_map[5]) {
+		_innov_check_fail_status.flags.reject_pos_D = true;
 	}
 
 	for (unsigned obs_index = 0; obs_index < 6; obs_index++) {

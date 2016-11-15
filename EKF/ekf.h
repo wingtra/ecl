@@ -97,6 +97,9 @@ public:
 	// get the state vector at the delayed time horizon
 	void get_state_delayed(float *state);
 
+	// get the wind velocity in m/s
+	void get_wind_velocity(float *wind);
+
 	// get the diagonal elements of the covariance matrix
 	void get_covariances(float *covariances);
 
@@ -121,20 +124,75 @@ public:
 	// return the estimated terrain vertical position relative to the NED origin
 	bool get_terrain_vert_pos(float *ret);
 
+	// return true if the estimate is valid
+	// return the estimated terrain vertical position 1-std error in m
+	bool get_terrain_vert_err(float *ret);
+
 	// get the accerometer bias in m/s/s
 	void get_accel_bias(float bias[3]);
+
+	// get the gyroscope bias in rad/s
+	void get_gyro_bias(float bias[3]);
 
 	// get GPS check status
 	void get_gps_check_status(uint16_t *_gps_check_fail_status);
 
-	// return the amount the local vertical position changed in the last height reset and the time of the reset
-	void get_vert_pos_reset(float *delta, uint64_t *time_us) {*delta = _vert_pos_reset_delta; *time_us = _time_vert_pos_reset;}
+	// return the amount the local vertical position changed in the last reset and the number of reset events
+	void get_posD_reset(float *delta, uint8_t *counter) {*delta = _state_reset_status.posD_change; *counter = _state_reset_status.posD_counter;}
+
+	// return the amount the local vertical velocity changed in the last reset and the number of reset events
+	void get_velD_reset(float *delta, uint8_t *counter) {*delta = _state_reset_status.velD_change; *counter = _state_reset_status.velD_counter;}
+
+	// return the amount the local horizontal position changed in the last reset and the number of reset events
+	void get_posNE_reset(float delta[2], uint8_t *counter){
+		memcpy(delta, &_state_reset_status.posNE_change._data[0], sizeof(_state_reset_status.posNE_change._data));
+		*counter = _state_reset_status.posNE_counter;
+	}
+
+	// return the amount the local horizontal velocity changed in the last reset and the number of reset events
+	void get_velNE_reset(float delta[2], uint8_t *counter) {
+		memcpy(delta, &_state_reset_status.velNE_change._data[0], sizeof(_state_reset_status.velNE_change._data));
+		*counter = _state_reset_status.velNE_counter;
+	}
+
+	// return the amount the quaternion has changed in the last reset and the number of reset events
+	void get_quat_reset(float delta_quat[4], uint8_t *counter)
+	{
+		memcpy(delta_quat, &_state_reset_status.quat_change._data[0], sizeof(_state_reset_status.quat_change._data));
+		*counter = _state_reset_status.quat_counter;
+	}
+
+	// get EKF innovation consistency check status information comprising of:
+	// status - a bitmask integer containing the pass/fail status for each EKF measurement innovation consistency check
+	// Innovation Test Ratios - these are the ratio of the innovation to the acceptance threshold.
+	// A value > 1 indicates that the sensor measurement has exceeded the maximum acceptable level and has been rejected by the EKF
+	// Where a measurement type is a vector quantity, eg magnetoemter, GPS position, etc, the maximum value is returned.
+	void get_innovation_test_status(uint16_t *status, float *mag, float *vel, float *pos, float *hgt, float *tas, float *hagl);
+
+	// return a bitmask integer that describes which state estimates can be used for flight control
+	void get_ekf_soln_status(uint16_t *status);
 
 private:
 
 	static const uint8_t _k_num_states = 24;
-	const float _k_earth_rate = 0.000072921f;
-	const float _gravity_mss = 9.80665f;
+	static const float _k_earth_rate;
+	static const float _gravity_mss;
+	static const float _pi_div_2;
+
+	// reset event monitoring
+	// structure containing velocity, position, height and yaw reset information
+	struct {
+		uint8_t velNE_counter;	// number of horizontal position reset events (allow to wrap if count exceeds 255)
+		uint8_t velD_counter;	// number of vertical velocity reset events (allow to wrap if count exceeds 255)
+		uint8_t posNE_counter;	// number of horizontal position reset events (allow to wrap if count exceeds 255)
+		uint8_t posD_counter;	// number of vertical position reset events (allow to wrap if count exceeds 255)
+		uint8_t quat_counter;	// number of quaternion reset events (allow to wrap if count exceeds 255)
+		Vector2f velNE_change;  // North East velocity change due to last reset (m)
+		float velD_change;	// Down velocity change due to last reset (m/s)
+		Vector2f posNE_change;	// North, East position change due to last reset (m)
+		float posD_change;	// Down position change due to last reset (m)
+		Quaternion quat_change;	// quaternion delta due to last reset - multiply pre-reset quaternion by this to get post-reset quaternion
+	} _state_reset_status;
 
 	float _dt_ekf_avg;		// average update rate of the ekf
 
@@ -147,8 +205,15 @@ private:
 	bool _fuse_pos;			// gps position data should be fused
 	bool _fuse_hor_vel;		// gps horizontal velocity measurement should be fused
 	bool _fuse_vert_vel;		// gps vertical velocity measurement should be fused
-	bool _fuse_flow;		// flow measurement should be fused
-	bool _fuse_hagl_data;		// if true then range data will be fused to estimate terrain height
+
+	// booleans true when fresh sensor data is available at the fusion time horizon
+	bool _gps_data_ready;
+	bool _mag_data_ready;
+	bool _baro_data_ready;
+	bool _range_data_ready;
+	bool _flow_data_ready;
+	bool _ev_data_ready;
+	bool _tas_data_ready;
 
 	uint64_t _time_last_fake_gps;	// last time in us at which we have faked gps measurement for static mode
 
@@ -159,11 +224,12 @@ private:
 	uint64_t _time_last_arsp_fuse;	// time the last fusion of airspeed measurements were performed (usec)
 	Vector2f _last_known_posNE;     // last known local NE position vector (m)
 	float _last_disarmed_posD;      // vertical position recorded at arming (m)
-	float _last_dt_overrun;		// the amount of time the last IMU collection over-ran the target set by FILTER_UPDATE_PERRIOD_MS (sec)
+	float _last_dt_overrun;		// the amount of time the last IMU collection over-ran the target set by FILTER_UPDATE_PERIOD_MS (sec)
 
 	Vector3f _earth_rate_NED;	// earth rotation vector (NED) in rad/s
 
 	matrix::Dcm<float> _R_to_earth;	// transformation matrix from body frame to earth frame from last EKF predition
+	matrix::Dcm<float> _R_to_earth_hov;	// transformation matrix from body frame with unity at HOVER ideal regime to earth frame from last EKF predition
 
 	float P[_k_num_states][_k_num_states];	// state covariance matrix
 	float KH[_k_num_states][_k_num_states]; // intermediate variable for the covariance update
@@ -192,8 +258,6 @@ private:
 
 	// complementary filter states
 	Vector3f _delta_angle_corr;	// delta angle correction vector
-	Vector3f _delta_vel_corr;	// delta velocity correction vector
-	Vector3f _vel_corr;		// velocity correction vector
 	imuSample _imu_down_sampled;	// down sampled imu data (sensor rate -> filter update rate)
 	Quaternion _q_down_sampled;	// down sampled quaternion (tracking delta angles between ekf update steps)
 
@@ -211,13 +275,18 @@ private:
 	float _gps_alt_ref;		// WGS-84 height (m)
 
 	// Variables used to initialise the filter states
-	uint32_t _hgt_counter;		// number of height samples taken
+	uint32_t _hgt_counter;		// number of height samples read during initialisation
 	float _rng_filt_state;		// filtered height measurement
-	uint32_t _mag_counter;		// number of magnetometer samples taken
+	uint32_t _mag_counter;		// number of magnetometer samples read during initialisation
+	uint32_t _ev_counter;		// number of exgernal vision samples read during initialisation
 	uint64_t _time_last_mag;	// measurement time of last magnetomter sample
 	Vector3f _mag_filt_state;	// filtered magnetometer measurement
 	Vector3f _delVel_sum;		// summed delta velocity
 	float _hgt_sensor_offset;	// set as necessary if desired to maintain the same height after a height reset (m)
+	float _baro_hgt_offset;		// baro height reading at the local NED origin (m)
+
+	// Variables used to control activation of post takeoff functionality
+	float _last_on_ground_posD; // last vertical position when the in_air status was false (m)
 
 	gps_check_fail_status_u _gps_check_fail_status;
 
@@ -234,12 +303,6 @@ private:
 	bool _gps_hgt_faulty;		// true if valid gps height data is unavailable for use
 	bool _rng_hgt_faulty;		// true if valid rnage finder height data is unavailable for use
 	int _primary_hgt_source;	// priary source of height data set at initialisation
-
-	float _baro_hgt_offset;		// baro height reading at the local NED origin (m)
-	float _vert_pos_reset_delta;	// increase in vertical position state at the last reset(m)
-	uint64_t _time_vert_pos_reset;	// last system time in usec that the vertical position state was reset
-	float _vert_vel_reset_delta;	// increase in vertical position velocity at the last reset(m)
-	uint64_t _time_vert_vel_reset;	// last system time in usec that the vertical velocity state was reset
 
 	// imu fault status
 	uint64_t _time_bad_vert_accel;	// last time a bad vertical accel was detected (usec)
@@ -332,6 +395,33 @@ private:
 	// Control the filter fusion modes
 	void controlFusionModes();
 
+	// control fusion of external vision observations
+	void controlExternalVisionFusion();
+
+	// control fusion of optical flow observtions
+	void controlOpticalFlowFusion();
+
+	// control fusion of GPS observations
+	void controlGpsFusion();
+
+	// control fusion of magnetometer observations
+	void controlMagFusion();
+
+	// control fusion of range finder observations
+	void controlRangeFinderFusion();
+
+	// control fusion of air data observations
+	void controlAirDataFusion();
+
+	// control fusion of pressure altitude observations
+	void controlBaroFusion();
+
+	// control fusion of velocity and position observations
+	void controlVelPosFusion();
+
+	// control for height sensor timeouts, sensor changes and state resets
+	void controlHeightSensorTimeouts();
+
 	// return the square of two floating point numbers - used in auto coded sections
 	inline float sq(float var)
 	{
@@ -346,5 +436,20 @@ private:
 
 	// calculate the measurement variance for the optical flow sensor
 	float calcOptFlowMeasVar();
+
+	// rotate quaternion covariances into variances for an equivalent rotation vector
+	Vector3f calcRotVecVariances();
+
+	// initialise the quaternion covariances using rotation vector variances
+	void initialiseQuatCovariances(Vector3f &rot_vec_var);
+
+	// perform a limited reset of the magnetic field state covariances
+	void resetMagCovariance();
+
+	// perform a limited reset of the wind state covariances
+	void resetWindCovariance();
+
+	// perform a reset of the wind states
+	void resetWindStates();
 
 };
