@@ -39,6 +39,7 @@
  * @author Paul Riseborough <p_riseborough@live.com.au>
  */
 
+#include "../ecl.h"
 #include "ekf.h"
 #include "mathlib.h"
 
@@ -57,6 +58,10 @@
 #endif
 
 
+const float Ekf::_k_earth_rate = 0.000072921f;
+const float Ekf::_gravity_mss = 9.80665f;
+const float Ekf::_pi_div_2 = 1.570796f;
+
 Ekf::Ekf():
 	_filter_initialised(false),
 	_earth_rate_initialised(false),
@@ -64,8 +69,13 @@ Ekf::Ekf():
 	_fuse_pos(false),
 	_fuse_hor_vel(false),
 	_fuse_vert_vel(false),
-	_fuse_flow(false),
-	_fuse_hagl_data(false),
+	_gps_data_ready(false),
+	_mag_data_ready(false),
+	_baro_data_ready(false),
+	_range_data_ready(false),
+	_flow_data_ready(false),
+	_ev_data_ready(false),
+	_tas_data_ready(false),
 	_time_last_fake_gps(0),
 	_time_last_pos_fuse(0),
 	_time_last_vel_fuse(0),
@@ -92,8 +102,11 @@ Ekf::Ekf():
 	_hgt_counter(0),
 	_rng_filt_state(0.0f),
 	_mag_counter(0),
+	_ev_counter(0),
 	_time_last_mag(0),
 	_hgt_sensor_offset(0.0f),
+	_baro_hgt_offset(0.0f),
+	_last_on_ground_posD(0.0f),
 	_terrain_vpos(0.0f),
 	_terrain_var(1.e4f),
 	_hagl_innov(0.0f),
@@ -102,17 +115,13 @@ Ekf::Ekf():
 	_baro_hgt_faulty(false),
 	_gps_hgt_faulty(false),
 	_rng_hgt_faulty(false),
-	_baro_hgt_offset(0.0f),
-	_vert_pos_reset_delta(0.0f),
-	_time_vert_pos_reset(0),
-	_vert_vel_reset_delta(0.0f),
-	_time_vert_vel_reset(0),
 	_time_bad_vert_accel(0)
 {
 	_state = {};
 	_last_known_posNE.setZero();
 	_earth_rate_NED.setZero();
 	_R_to_earth = matrix::Dcm<float>();
+	_R_to_earth_hov = matrix::Dcm<float>();
 	memset(_vel_pos_innov, 0, sizeof(_vel_pos_innov));
 	memset(_mag_innov, 0, sizeof(_mag_innov));
 	memset(_flow_innov, 0, sizeof(_flow_innov));
@@ -120,16 +129,17 @@ Ekf::Ekf():
 	memset(_mag_innov_var, 0, sizeof(_mag_innov_var));
 	memset(_flow_innov_var, 0, sizeof(_flow_innov_var));
 	_delta_angle_corr.setZero();
-	_delta_vel_corr.setZero();
-	_vel_corr.setZero();
 	_last_known_posNE.setZero();
 	_imu_down_sampled = {};
 	_q_down_sampled.setZero();
+	_vel_err_integ.setZero();
+	_pos_err_integ.setZero();
 	_mag_filt_state = {};
 	_delVel_sum = {};
 	_flow_gyro_bias = {};
 	_imu_del_ang_of = {};
 	_gps_check_fail_status.value = 0;
+	_state_reset_status = {};
 }
 
 Ekf::~Ekf()
@@ -154,9 +164,6 @@ bool Ekf::init(uint64_t timestamp)
 	_output_new.quat_nominal = matrix::Quaternion<float>();
 
 	_delta_angle_corr.setZero();
-	_delta_vel_corr.setZero();
-	_vel_corr.setZero();
-
 	_imu_down_sampled.delta_ang.setZero();
 	_imu_down_sampled.delta_vel.setZero();
 	_imu_down_sampled.delta_ang_dt = 0.0f;
@@ -171,7 +178,6 @@ bool Ekf::init(uint64_t timestamp)
 	_imu_updated = false;
 	_NED_origin_initialised = false;
 	_gps_speed_valid = false;
-	_mag_healthy = false;
 
 	_filter_initialised = false;
 	_terrain_initialised = false;
@@ -179,7 +185,10 @@ bool Ekf::init(uint64_t timestamp)
 	_control_status.value = 0;
 	_control_status_prev.value = 0;
 
-	_dt_ekf_avg = 0.001f * (float)(FILTER_UPDATE_PERRIOD_MS);
+	_dt_ekf_avg = 0.001f * (float)(FILTER_UPDATE_PERIOD_MS);
+
+	_fault_status.value = 0;
+	_innov_check_fail_status.value = 0;
 
 	return ret;
 }
@@ -207,152 +216,20 @@ bool Ekf::update()
 			_terrain_initialised = initHagl();
 
 		} else {
-			predictHagl();
+			// declare the terrain estimator uninitialised if too long without
+			// fusiong data to force a reset when valid data is available
+			if ((_time_last_imu - _time_last_hagl_fuse) > 10e6) {
+				_terrain_initialised = false;
+
+			} else {
+				predictHagl();
+
+			}
 		}
 
-		// control logic
+		// control fusion of observation data
 		controlFusionModes();
 
-		// measurement updates
-
-		// Fuse magnetometer data using the selected fuson method and only if angular alignment is complete
-		if (_mag_buffer.pop_first_older_than(_imu_sample_delayed.time_us, &_mag_sample_delayed)) {
-			if (_control_status.flags.mag_3D && _control_status.flags.yaw_align) {
-				fuseMag();
-
-				if (_control_status.flags.mag_dec) {
-					fuseDeclination();
-				}
-
-			} else if (_control_status.flags.mag_hdg && _control_status.flags.yaw_align) {
-				// fusion of a Euler yaw angle from either a 321 or 312 rotation sequence
-				fuseHeading();
-
-			} else {
-				// do no fusion at all
-			}
-		}
-
-		// determine if range finder data has fallen behind the fusin time horizon fuse it if we are
-		// not tilted too much to use it
-		if (_range_buffer.pop_first_older_than(_imu_sample_delayed.time_us, &_range_sample_delayed)
-		    && (_R_to_earth(2, 2) > 0.7071f)) {
-			// correct the range data for position offset relative to the IMU
-			Vector3f pos_offset_body = _params.rng_pos_body - _params.imu_pos_body;
-			Vector3f pos_offset_earth = _R_to_earth * pos_offset_body;
-			_range_sample_delayed.rng += pos_offset_earth(2) / _R_to_earth(2, 2);
-
-			// if we have range data we always try to estimate terrain height
-			_fuse_hagl_data = true;
-
-			// only use range finder as a height observation in the main filter if specifically enabled
-			if (_control_status.flags.rng_hgt) {
-				_fuse_height = true;
-			}
-
-		} else if ((_time_last_imu - _time_last_hgt_fuse) > 2 * RNG_MAX_INTERVAL && _control_status.flags.rng_hgt) {
-			// If we are supposed to be using range finder data as the primary height sensor, have missed or rejected measurements
-			// and are on the ground, then synthesise a measurement at the expected on ground value
-			if (!_control_status.flags.in_air) {
-				_range_sample_delayed.rng = _params.rng_gnd_clearance;
-				_range_sample_delayed.time_us = _imu_sample_delayed.time_us;
-
-			}
-
-			_fuse_height = true;
-		}
-
-		// determine if baro data has fallen behind the fuson time horizon and fuse it in the main filter if enabled
-		uint64_t last_baro_time_us = _baro_sample_delayed.time_us;
-		if (_baro_buffer.pop_first_older_than(_imu_sample_delayed.time_us, &_baro_sample_delayed)) {
-			if (_control_status.flags.baro_hgt) {
-				_fuse_height = true;
-
-			} else {
-				// calculate a filtered offset between the baro origin and local NED origin if we are not using the baro  as a height reference
-				float local_time_step = 1e-6f*(float)(_baro_sample_delayed.time_us - last_baro_time_us);
-				local_time_step = math::constrain(local_time_step,0.0f,1.0f);
-				last_baro_time_us = _baro_sample_delayed.time_us;
-				float offset_rate_correction =  0.1f * (_baro_sample_delayed.hgt - _hgt_sensor_offset) + _state.pos(2) - _baro_hgt_offset;
-				_baro_hgt_offset += local_time_step * math::constrain(offset_rate_correction, -0.1f, 0.1f);
-			}
-		}
-
-		// If we are using GPS aiding and data has fallen behind the fusion time horizon then fuse it
-		if (_gps_buffer.pop_first_older_than(_imu_sample_delayed.time_us, &_gps_sample_delayed)) {
-			// Only use GPS data for position and velocity aiding if enabled
-			if (_control_status.flags.gps) {
-				_fuse_pos = true;
-				_fuse_vert_vel = true;
-				_fuse_hor_vel = true;
-
-				// correct velocity for offset relative to IMU
-				Vector3f ang_rate = _imu_sample_delayed.delta_ang * (1.0f/_imu_sample_delayed.delta_ang_dt);
-				Vector3f pos_offset_body = _params.gps_pos_body - _params.imu_pos_body;
-				Vector3f vel_offset_body = cross_product(ang_rate,pos_offset_body);
-				Vector3f vel_offset_earth = _R_to_earth * vel_offset_body;
-				_gps_sample_delayed.vel -= vel_offset_earth;
-
-				// correct position and height for offset relative to IMU
-				Vector3f pos_offset_earth = _R_to_earth * pos_offset_body;
-				_gps_sample_delayed.pos(0) -= pos_offset_earth(0);
-				_gps_sample_delayed.pos(1) -= pos_offset_earth(1);
-				_gps_sample_delayed.hgt += pos_offset_earth(2);
-
-			}
-
-			// only use gps height observation in the main filter if specifically enabled
-			if (_control_status.flags.gps_hgt) {
-				_fuse_height = true;
-			}
-
-		}
-
-		// If we are using optical flow aiding and data has fallen behind the fusion time horizon, then fuse it
-		if (_flow_buffer.pop_first_older_than(_imu_sample_delayed.time_us, &_flow_sample_delayed)
-		    && _control_status.flags.opt_flow && (_time_last_imu - _time_last_optflow) < 2e5
-		    && (_R_to_earth(2, 2) > 0.7071f)) {
-			_fuse_flow = true;
-		}
-
-		// if we aren't doing any aiding, fake GPS measurements at the last known position to constrain drift
-		// Coincide fake measurements with baro data for efficiency with a minimum fusion rate of 5Hz
-		if (!_control_status.flags.gps && !_control_status.flags.opt_flow
-		    && ((_time_last_imu - _time_last_fake_gps > 2e5) || _fuse_height)) {
-			_fuse_pos = true;
-			_gps_sample_delayed.pos(0) = _last_known_posNE(0);
-			_gps_sample_delayed.pos(1) = _last_known_posNE(1);
-			_time_last_fake_gps = _time_last_imu;
-		}
-
-		// fuse available range finder data into a terrain height estimator if it has been initialised
-		if (_fuse_hagl_data && _terrain_initialised) {
-			fuseHagl();
-			_fuse_hagl_data = false;
-		}
-
-		// Fuse available NED velocity and position data into the main filter
-		if (_fuse_height || _fuse_pos || _fuse_hor_vel || _fuse_vert_vel) {
-			fuseVelPosHeight();
-			_fuse_hor_vel = _fuse_vert_vel = _fuse_pos = _fuse_height = false;
-		}
-
-		// Update optical flow bias estimates
-		calcOptFlowBias();
-
-		// Fuse optical flow LOS rate observations into the main filter
-		if (_fuse_flow) {
-			fuseOptFlow();
-			_last_known_posNE(0) = _state.pos(0);
-			_last_known_posNE(1) = _state.pos(1);
-			_fuse_flow = false;
-		}
-
-		// TODO This is just to get the logic inside but we will only start fusion once we tested this again
-		//if (_airspeed_buffer.pop_first_older_than(_imu_sample_delayed.time_us, &_airspeed_sample_delayed)) {
-		if (false) {
-			fuseAirspeed();
-		}
 	}
 
 	// the output observer always runs
@@ -374,7 +251,7 @@ bool Ekf::update()
 
 bool Ekf::initialiseFilter(void)
 {
-	// Keep accumulating measurements until we have a minimum of 10 samples for the baro and magnetoemter
+	// Keep accumulating measurements until we have a minimum of 10 samples for the required sensors
 
 	// Sum the IMU delta angle measurements
 	imuSample imu_init = _imu_buffer.get_newest();
@@ -382,14 +259,38 @@ bool Ekf::initialiseFilter(void)
 
 	// Sum the magnetometer measurements
 	if (_mag_buffer.pop_first_older_than(_imu_sample_delayed.time_us, &_mag_sample_delayed)) {
-		if (_mag_counter == 0 && _mag_sample_delayed.time_us !=0) {
-			// initialise the filter states and counter when we start getting valid data from the buffer
-			_mag_filt_state = _mag_sample_delayed.mag;
+		if ((_mag_counter == 0) && (_mag_sample_delayed.time_us != 0)) {
+			// initialise the counter when we start getting data from the buffer
 			_mag_counter = 1;
-		} else if (_mag_counter != 0) {
+		} else if ((_mag_counter != 0) && (_mag_sample_delayed.time_us != 0)) {
 			// increment the sample count and apply a LPF to the measurement
 			_mag_counter ++;
-			_mag_filt_state = _mag_filt_state * 0.9f + _mag_sample_delayed.mag * 0.1f;
+			// don't start using data until we can be certain all bad initial data has been flushed
+			if (_mag_counter == OBS_BUFFER_LENGTH+1) {
+				// initialise filter states
+				_mag_filt_state = _mag_sample_delayed.mag;
+			} else if (_mag_counter > OBS_BUFFER_LENGTH+1) {
+				// noise filter the data
+				_mag_filt_state = _mag_filt_state * 0.9f + _mag_sample_delayed.mag * 0.1f;
+			}
+		}
+	}
+
+	// Count the number of external vision measurements received
+	if (_ext_vision_buffer.pop_first_older_than(_imu_sample_delayed.time_us, &_ev_sample_delayed)) {
+		if ((_ev_counter == 0) && (_ev_sample_delayed.time_us != 0)) {
+			// initialise the counter
+			_ev_counter = 1;
+			// set the height fusion mode to use external vision data when we start getting valid data from the buffer
+			if (_primary_hgt_source == VDIST_SENSOR_EV) {
+				_control_status.flags.baro_hgt = false;
+				_control_status.flags.gps_hgt = false;
+				_control_status.flags.rng_hgt = false;
+				_control_status.flags.ev_hgt = true;
+			}
+		} else if ((_ev_counter != 0) && (_ev_sample_delayed.time_us != 0)) {
+			// increment the sample count
+			_ev_counter ++;
 		}
 	}
 
@@ -398,19 +299,27 @@ bool Ekf::initialiseFilter(void)
 		_primary_hgt_source = _params.vdist_sensor_type;
 	}
 
+	// accumulate enough height measurements to be confident in the qulaity of the data
 	if (_primary_hgt_source == VDIST_SENSOR_RANGE) {
 		if (_range_buffer.pop_first_older_than(_imu_sample_delayed.time_us, &_range_sample_delayed)) {
-			if (_hgt_counter == 0 && _range_sample_delayed.time_us != 0) {
-				// initialise the filter states and counter when we start getting valid data from the buffer
+			if ((_hgt_counter == 0) && (_range_sample_delayed.time_us != 0)) {
+				// initialise the counter height fusion method when we start getting data from the buffer
 				_control_status.flags.baro_hgt = false;
 				_control_status.flags.gps_hgt = false;
 				_control_status.flags.rng_hgt = true;
-				_rng_filt_state = _range_sample_delayed.rng;
+				_control_status.flags.ev_hgt = false;
 				_hgt_counter = 1;
-			} else if (_hgt_counter != 0) {
+			} else if ((_hgt_counter != 0) && (_range_sample_delayed.time_us != 0)) {
 				// increment the sample count and apply a LPF to the measurement
 				_hgt_counter ++;
-				_rng_filt_state = 0.9f * _rng_filt_state + 0.1f * _range_sample_delayed.rng;
+				// don't start using data until we can be certain all bad initial data has been flushed
+				if (_hgt_counter == OBS_BUFFER_LENGTH+1) {
+					// initialise filter states
+					_rng_filt_state = _range_sample_delayed.rng;
+				} else if (_hgt_counter > OBS_BUFFER_LENGTH+1) {
+					// noise filter the data
+					_rng_filt_state = 0.9f * _rng_filt_state + 0.1f * _range_sample_delayed.rng;
+				}
 			}
 		}
 
@@ -418,26 +327,37 @@ bool Ekf::initialiseFilter(void)
 		// if the user parameter specifies use of GPS for height we use baro height initially and switch to GPS
 		// later when it passes checks.
 		if (_baro_buffer.pop_first_older_than(_imu_sample_delayed.time_us, &_baro_sample_delayed)) {
-			if (_hgt_counter == 0 && _baro_sample_delayed.time_us != 0) {
-				// initialise the filter states and counter when we start getting valid data from the buffer
+			if ((_hgt_counter == 0) && (_baro_sample_delayed.time_us != 0)) {
+				// initialise the counter and height fusion method when we start getting data from the buffer
 				_control_status.flags.baro_hgt = true;
 				_control_status.flags.gps_hgt = false;
 				_control_status.flags.rng_hgt = false;
-				_baro_hgt_offset = _baro_sample_delayed.hgt;
 				_hgt_counter = 1;
-			} else if (_hgt_counter != 0) {
+			} else if ((_hgt_counter != 0) && (_baro_sample_delayed.time_us != 0)) {
 				// increment the sample count and apply a LPF to the measurement
 				_hgt_counter ++;
-				_baro_hgt_offset = 0.9f * _baro_hgt_offset + 0.1f * _baro_sample_delayed.hgt;
+				// don't start using data until we can be certain all bad initial data has been flushed
+				if (_hgt_counter == OBS_BUFFER_LENGTH+1) {
+					// initialise filter states
+					_baro_hgt_offset = _baro_sample_delayed.hgt;
+				} else if (_hgt_counter > OBS_BUFFER_LENGTH+1) {
+					// noise filter the data
+					_baro_hgt_offset = 0.9f * _baro_hgt_offset + 0.1f * _baro_sample_delayed.hgt;
+				}
 			}
 		}
 
+	} else if (_primary_hgt_source == VDIST_SENSOR_EV) {
+		// do nothing becasue vision data is checked elsewhere
 	} else {
 		return false;
 	}
 
 	// check to see if we have enough measurements and return false if not
-	if (_hgt_counter <= 10 || _mag_counter <= 10) {
+	bool hgt_count_fail = _hgt_counter <= 2*OBS_BUFFER_LENGTH;
+	bool mag_count_fail = _mag_counter <= 2*OBS_BUFFER_LENGTH;
+	bool ev_count_fail = ((_params.fusion_mode & MASK_USE_EVPOS) || (_params.fusion_mode & MASK_USE_EVYAW)) && (_ev_counter <= 2*OBS_BUFFER_LENGTH);
+	if (hgt_count_fail || mag_count_fail || ev_count_fail) {
 		return false;
 
 	} else {
@@ -474,26 +394,41 @@ bool Ekf::initialiseFilter(void)
 
 		// update transformation matrix from body to world frame
 		_R_to_earth = quat_to_invrotmat(_state.quat_nominal);
+		/* Rotate R by 90 deg pitch to transform to Wingtra body axis convention */
+		matrix::Euler<float> to_hov(0.0f, - _pi_div_2, 0.0f);
+		matrix::Dcm<float> To_hov(to_hov);
+		_R_to_earth_hov = _R_to_earth * To_hov;
 
 		// calculate the averaged magnetometer reading
 		Vector3f mag_init = _mag_filt_state;
 
 		// calculate the initial magnetic field and yaw alignment
-		resetMagHeading(mag_init);
+		_control_status.flags.yaw_align = resetMagHeading(mag_init);
 
-		// if we are using the range finder as the primary source, then calculate the baro height at origin so  we can use baro as a backup
-		// so it can be used as a backup ad set the initial height using the range finder
 		if (_control_status.flags.rng_hgt) {
+			// if we are using the range finder as the primary source, then calculate the baro height at origin so  we can use baro as a backup
+			// so it can be used as a backup ad set the initial height using the range finder
 			baroSample baro_newest = _baro_buffer.get_newest();
 			_baro_hgt_offset = baro_newest.hgt;
-			_state.pos(2) = -math::max(_rng_filt_state * _R_to_earth(2, 2),_params.rng_gnd_clearance);
+			_state.pos(2) = -math::max(_rng_filt_state * _R_to_earth_hov(2, 2),_params.rng_gnd_clearance);
+			ECL_INFO("EKF using range finder height - commencing alignment");
+
+		} else if (_control_status.flags.ev_hgt) {
+			// if we are using external vision data for height, then the vertical position state needs to be reset
+			// because the initialisation position is not the zero datum
+			resetHeight();
+			ECL_INFO("EKF using vision height - commencing alignment");
+
+		} else if (_control_status.flags.baro_hgt){
+			ECL_INFO("EKF using pressure height - commencing alignment");
+
 		}
 
 		// initialise the state covariance matrix
 		initialiseCovariance();
 
-		// initialise the terrain estimator
-		initHagl();
+		// try to initialise the terrain estimator
+		_terrain_initialised = initHagl();
 
 		// reset the essential fusion timeout counters
 		_time_last_hgt_fuse = _time_last_imu;
@@ -501,6 +436,9 @@ bool Ekf::initialiseFilter(void)
 		_time_last_vel_fuse = _time_last_imu;
 		_time_last_hagl_fuse = _time_last_imu;
 		_time_last_of_fuse = _time_last_imu;
+
+		// reset the output predictor state history to match the EKF initial values
+		alignOutputFilter();
 
 		return true;
 	}
@@ -535,8 +473,14 @@ void Ekf::predictState()
 	// save the previous value of velocity so we can use trapzoidal integration
 	Vector3f vel_last = _state.vel;
 
-	// update the rotation matrix and calculate the increment in velocity using the current orientation
+	// update transformation matrix from body to world frame
 	_R_to_earth = quat_to_invrotmat(_state.quat_nominal);
+	/* Rotate R by 90 deg pitch to transform to Wingtra body axis convention */
+	matrix::Euler<float> to_hov(0.0f, - _pi_div_2, 0.0f);
+	matrix::Dcm<float> To_hov(to_hov);
+	_R_to_earth_hov = _R_to_earth * To_hov;	
+
+	// calculate the increment in velocity using the current orientation
 	_state.vel += _R_to_earth * corrected_delta_vel;
 
 	// compensate for acceleration due to gravity
@@ -545,22 +489,19 @@ void Ekf::predictState()
 	// predict position states via trapezoidal integration of velocity
 	_state.pos += (vel_last + _state.vel) * _imu_sample_delayed.delta_vel_dt * 0.5f;
 
-	// update transformation matrix from body to world frame
-	_R_to_earth = quat_to_invrotmat(_state.quat_nominal);
-
 	constrainStates();
 
 	// calculate an average filter update time
 	float input = 0.5f*(_imu_sample_delayed.delta_vel_dt + _imu_sample_delayed.delta_ang_dt);
 
 	// filter and limit input between -50% and +100% of nominal value
-	input = math::constrain(input,0.0005f * (float)(FILTER_UPDATE_PERRIOD_MS),0.002f * (float)(FILTER_UPDATE_PERRIOD_MS));
-	_dt_ekf_avg = 0.99f*_dt_ekf_avg + 0.005f*(_imu_sample_delayed.delta_vel_dt + _imu_sample_delayed.delta_ang_dt);
+	input = math::constrain(input,0.0005f * (float)(FILTER_UPDATE_PERIOD_MS),0.002f * (float)(FILTER_UPDATE_PERIOD_MS));
+	_dt_ekf_avg = 0.99f * _dt_ekf_avg + 0.01f * input;
 }
 
 bool Ekf::collect_imu(imuSample &imu)
 {
-	// accumulate and downsample IMU data across a period FILTER_UPDATE_PERRIOD_MS long
+	// accumulate and downsample IMU data across a period FILTER_UPDATE_PERIOD_MS long
 
 	// copy imu data to local variables
 	_imu_sample_new.delta_ang	= imu.delta_ang;
@@ -590,7 +531,7 @@ bool Ekf::collect_imu(imuSample &imu)
 
 	// if the target time delta between filter prediction steps has been exceeded
 	// write the accumulated IMU data to the ring buffer
-	float target_dt = (float)(FILTER_UPDATE_PERRIOD_MS) / 1000;
+	float target_dt = (float)(FILTER_UPDATE_PERIOD_MS) / 1000;
 	if (_imu_down_sampled.delta_ang_dt >= target_dt - _last_dt_overrun) {
 
 		// store the amount we have over-run the target update rate by
@@ -657,8 +598,7 @@ void Ekf::calculateOutputStates()
 	_R_to_earth_now = quat_to_invrotmat(_output_new.quat_nominal);
 
 	// rotate the delta velocity to earth frame
-	// apply a delta velocity correction required to track the velocity states at the EKF fusion time horizon
-	Vector3f delta_vel_NED = _R_to_earth_now * delta_vel + _delta_vel_corr;
+	Vector3f delta_vel_NED = _R_to_earth_now * delta_vel;
 
 	// corrrect for measured accceleration due to gravity
 	delta_vel_NED(2) += _gravity_mss * imu_new.delta_vel_dt;
@@ -670,50 +610,86 @@ void Ekf::calculateOutputStates()
 	_output_new.vel += delta_vel_NED;
 
 	// use trapezoidal integration to calculate the INS position states
-	// apply a velocity correction required to track the position states at the EKF fusion time horizon
-	_output_new.pos += (_output_new.vel + vel_last) * (imu_new.delta_vel_dt * 0.5f) + _vel_corr * imu_new.delta_vel_dt;
+	_output_new.pos += (_output_new.vel + vel_last) * (imu_new.delta_vel_dt * 0.5f);
 
 	// store INS states in a ring buffer that with the same length and time coordinates as the IMU data buffer
 	if (_imu_updated) {
 		_output_buffer.push(_output_new);
 		_imu_updated = false;
+
+		// get the oldest INS state data from the ring buffer
+		// this data will be at the EKF fusion time horizon
+		_output_sample_delayed = _output_buffer.get_oldest();
+
+		// calculate the quaternion delta between the INS and EKF quaternions at the EKF fusion time horizon
+		Quaternion quat_inv = _state.quat_nominal.inversed();
+		Quaternion q_error =  _output_sample_delayed.quat_nominal * quat_inv;
+		q_error.normalize();
+
+		// convert the quaternion delta to a delta angle
+		Vector3f delta_ang_error;
+		float scalar;
+		if (q_error(0) >= 0.0f) {
+			scalar = -2.0f;
+
+		} else {
+			scalar = 2.0f;
+		}
+		delta_ang_error(0) = scalar * q_error(1);
+		delta_ang_error(1) = scalar * q_error(2);
+		delta_ang_error(2) = scalar * q_error(3);
+
+		// calculate a gain that provides tight tracking of the estimator attitude states and
+		// adjust for changes in time delay to maintain consistent damping ratio of ~0.7
+		float time_delay = 1e-6f * (float)(_imu_sample_new.time_us - _imu_sample_delayed.time_us);
+		time_delay = fmaxf(time_delay, _dt_imu_avg);
+		float att_gain = 0.5f * _dt_imu_avg / time_delay;
+
+		// calculate a corrrection to the delta angle
+		// that will cause the INS to track the EKF quaternions
+		_delta_angle_corr = delta_ang_error * att_gain;
+
+		// calculate velocity and position tracking errors
+		Vector3f vel_err = (_state.vel - _output_sample_delayed.vel);
+		Vector3f pos_err = (_state.pos - _output_sample_delayed.pos);
+
+		// collect magnitude tracking error for diagnostics
+		_output_tracking_error[0] = delta_ang_error.norm();
+		_output_tracking_error[1] = vel_err.norm();
+		_output_tracking_error[2] = pos_err.norm();
+
+		// calculate a velocity correction that will be applied to the output state history
+		float vel_gain = _dt_ekf_avg / math::constrain(_params.vel_Tau, _dt_ekf_avg, 10.0f);
+		_vel_err_integ += vel_err;
+		Vector3f vel_correction = vel_err * vel_gain + _vel_err_integ * sq(vel_gain) * 0.1f;
+
+		// calculate a position correction that will be applied to the output state history
+		float pos_gain = _dt_ekf_avg / math::constrain(_params.pos_Tau, _dt_ekf_avg, 10.0f);
+		_pos_err_integ += pos_err;
+		Vector3f pos_correction = pos_err * pos_gain + _pos_err_integ * sq(pos_gain) * 0.1f;
+
+		// loop through the output filter state history and apply the corrections to the velocity and position states
+		// this method is too expensive to use for the attitude states due to the quaternion operations required
+		// but does not introduce a time delay in the 'correction loop' and allows smaller tracking time constants
+		// to be used
+		outputSample output_states;
+		unsigned max_index = _output_buffer.get_length() - 1;
+		for (unsigned index=0; index <= max_index; index++) {
+			output_states = _output_buffer.get_from_index(index);
+
+			// a constant  velocity correction is applied
+			output_states.vel += vel_correction;
+
+			// a constant position correction is applied
+			output_states.pos += pos_correction;
+
+			// push the updated data to the buffer
+			_output_buffer.push_to_index(index,output_states);
+
+		}
+
+		// update output state to corrected values
+		_output_new = _output_buffer.get_newest();
+
 	}
-
-	// get the oldest INS state data from the ring buffer
-	// this data will be at the EKF fusion time horizon
-	_output_sample_delayed = _output_buffer.get_oldest();
-
-	// calculate the quaternion delta between the INS and EKF quaternions at the EKF fusion time horizon
-	Quaternion quat_inv = _state.quat_nominal.inversed();
-	Quaternion q_error =  _output_sample_delayed.quat_nominal * quat_inv;
-	q_error.normalize();
-
-	// convert the quaternion delta to a delta angle
-	Vector3f delta_ang_error;
-	float scalar;
-	if (q_error(0) >= 0.0f) {
-		scalar = -2.0f;
-
-	} else {
-		scalar = 2.0f;
-	}
-	delta_ang_error(0) = scalar * q_error(1);
-	delta_ang_error(1) = scalar * q_error(2);
-	delta_ang_error(2) = scalar * q_error(3);
-
-	// calculate gains that provides tight tracking of the estimator states and
-	// adjust for changes in time delay to mantain consistent overshoot
-	float omega = 1e6f / (_imu_sample_new.time_us - _imu_sample_delayed.time_us);
-
-	// calculate a corrrection to the delta angle
-	// that will cause the INS to track the EKF quaternions
-	_delta_angle_corr = delta_ang_error * imu_new.delta_ang_dt * omega * 0.5f;
-
-	// calculate a correction to the delta velocity
-	// that will cause the INS to track the EKF velocity
-	_delta_vel_corr = (_state.vel - _output_sample_delayed.vel) * imu_new.delta_vel_dt * omega * 0.5f;
-
-	// calculate a correction to the INS velocity
-	// that will cause the INS to track the EKF position
-	_vel_corr = (_state.pos - _output_sample_delayed.pos) * omega * 0.6f;
 }

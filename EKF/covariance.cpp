@@ -53,13 +53,14 @@ void Ekf::initialiseCovariance()
 	}
 
 	// calculate average prediction time step in sec
-	float dt = 0.001f * (float)FILTER_UPDATE_PERRIOD_MS;
+	float dt = 0.001f * (float)FILTER_UPDATE_PERIOD_MS;
 
-	// quaternion error
-	P[0][0]   = 0.01f;
-	P[1][1]   = 0.01f;
-	P[2][2]   = 0.01f;
-	P[3][3]   = 0.01f;
+	// define the initial angle uncertainty as variances for a rotation vector
+	Vector3f rot_vec_var;
+	rot_vec_var(2) = rot_vec_var(1) = rot_vec_var(0) = sq(_params.initial_tilt_err);
+
+	// update the quaternion state covariances
+	initialiseQuatCovariances(rot_vec_var);
 
 	// velocity
 	P[4][4] = sq(fmaxf(_params.gps_vel_noise, 0.01f));
@@ -80,31 +81,26 @@ void Ekf::initialiseCovariance()
 	}
 
 	// gyro bias
-	P[10][10] = sq(0.1f * dt);
+	P[10][10] = sq(_params.switch_on_gyro_bias * dt);
 	P[11][11] = P[10][10];
 	P[12][12] = P[10][10];
 
 	// accel bias
-	P[13][13] = sq(0.2f * dt);
+	P[13][13] = sq(_params.switch_on_accel_bias * dt);
 	P[14][14] = P[13][13];
 	P[15][15] = P[13][13];
 
 	// variances for optional states
-	// these state variances are set to zero until the states are required, then they must be initialised
 
-	// earth magnetic field
-	P[16][16] = 0.0f;
-	P[17][17] = 0.0f;
-	P[18][18] = 0.0f;
-
-	// body magnetic field
-	P[19][19] = 0.0f;
-	P[20][20] = 0.0f;
-	P[21][21] = 0.0f;
+	// earth frame and body frame magnetic field
+	// set to observation variance
+	for (uint8_t index=16; index <= 21; index ++) {
+		P[index][index] = sq(_params.mag_noise);
+	}
 
 	// wind
-	P[22][22] = 0.0f;
-	P[23][23] = 0.0f;
+	P[22][22] = 1.0f;
+	P[23][23] = 1.0f;
 
 }
 
@@ -159,7 +155,7 @@ void Ekf::predictCovariance()
 
 	// Don't continue to grow the earth field variances if they are becoming too large or we are not doing 3-axis fusion as this can make the covariance matrix badly conditioned
 	float mag_I_sig;
-	if (_control_status.flags.mag_3D && (P[16][16] + P[17][17] + P[18][8]) < 0.1f) {
+	if (_control_status.flags.mag_3D && (P[16][16] + P[17][17] + P[18][18]) < 0.1f) {
 		mag_I_sig = dt * math::constrain(_params.mage_p_noise, 0.0f, 1.0f);
 
 	} else {
@@ -567,50 +563,6 @@ void Ekf::predictCovariance()
 
 	// Don't do covariance prediction on wind states unless we are using them
 	if (_control_status.flags.wind) {
-		// Check if we have just transitioned to using wind states and set the variances accordingly
-		if (!_control_status_prev.flags.wind) {
-			// simple initialisation of wind states: calculate wind component along the forward axis
-			// of the plane.
-			
-			matrix::Euler<float> euler(_output_new.quat_nominal);
-			float heading = euler(2);
-
-			// ground speed component in the xy plane projected onto the directon the plane is heading to
-			float ground_speed_xy_nose = _output_new.vel(0) * cosf(heading) + _output_new.vel(1) * sinf(heading);
-			airspeedSample tmp = _airspeed_buffer.get_newest();
-			float airspeed = tmp.true_airspeed;
-
-			// check if the calculation is well conditioned:
-			// our airspeed measurement is at least as hight as our down velocity and the plane is moving forward
-			if (airspeed > fabsf(_output_new.vel(2)) && ground_speed_xy_nose > 0) {
-	
-				float ground_speed = sqrtf(_output_new.vel(0) * _output_new.vel(0) + _output_new.vel(1) * _output_new.vel(1) + _output_new.vel(2) * _output_new.vel(2));
-				
-				// wind magnitude in the direction the plane is
-				float wind_magnitude = ground_speed_xy_nose -  sqrtf(airspeed *  airspeed - _output_new.vel(2) * _output_new.vel(2));
-
-				// determine direction of wind
-				float wind_sign = 1;
-				if (airspeed < ground_speed) {
-					// wind is in nose direction
-					wind_sign = 1;
-				} else {
-					wind_sign = -1;
-				}
-
-				_state.wind_vel(0) = cosf(heading) * wind_magnitude * wind_sign;
-				_state.wind_vel(1) = sinf(heading) * wind_magnitude * wind_sign;
-
-			} else {
-				// calculation is badly conditioned, just set wind states to zero
-				_state.wind_vel.setZero();
-			}
-
-			// initialise diagonal of covariance matrix for the wind velocity states
-			for (uint8_t index = 22; index <= 23; index++) {
-				P[index][index] = sq(5.0f);
-			}
-		}
 
 		// calculate variances and upper diagonal covariances for wind states
 		nextP[0][22] = P[0][22] + P[1][22]*SF[9] + P[2][22]*SF[11] + P[3][22]*SF[10] + P[10][22]*SF[14] + P[11][22]*SF[15] + P[12][22]*SPP[10];
@@ -781,4 +733,52 @@ void Ekf::fixCovarianceErrors()
 		// force symmetry
 		makeSymmetrical(P,22,23);
 	}
+}
+
+void Ekf::resetMagCovariance()
+{	
+	// set the quaternion covariance terms to zero
+	zeroRows(P,0,3);
+	zeroCols(P,0,3);
+
+	// set the magnetic field covariance terms to zero
+	zeroRows(P,16,21);
+	zeroCols(P,16,21);
+
+	// set the field state variance to the observation variance
+	for (uint8_t rc_index=16; rc_index <= 21; rc_index ++) {
+		P[rc_index][rc_index] = sq(_params.mag_noise);
+	}
+}
+
+void Ekf::resetWindCovariance()
+{
+	// set the wind  covariance terms to zero
+	zeroRows(P,22,23);
+	zeroCols(P,22,23);
+
+	// calculate the wind speed and bearing
+	float spd = sqrtf(sq(_state.wind_vel(0))+sq(_state.wind_vel(1)));
+	float yaw = atan2f(_state.wind_vel(1),_state.wind_vel(0));
+
+	// calculate the uncertainty in wind speed and direction using the uncertainty in airspeed and sideslip angle
+	// used to calculate the initial wind speed
+	float R_spd = sq(math::constrain(_params.eas_noise, 0.5f, 5.0f) * math::constrain(_airspeed_sample_delayed.eas2tas, 0.9f, 10.0f));
+	float R_yaw = sq(0.1745f);
+
+	// calculate the variance and covariance terms for the wind states
+	float cos_yaw = cosf(yaw);
+	float sin_yaw = sinf(yaw);
+	float cos_yaw_2 = sq(cos_yaw);
+	float sin_yaw_2 = sq(sin_yaw);
+	float sin_cos_yaw = sin_yaw*cos_yaw;
+	float spd_2 = sq(spd);
+	P[22][22] = R_yaw*spd_2*sin_yaw_2 + R_spd*cos_yaw_2;
+	P[22][23] = - R_yaw*sin_cos_yaw*spd_2 + R_spd*sin_cos_yaw;
+	P[23][22] = P[22][23];
+	P[23][23] = R_yaw*spd_2*cos_yaw_2 + R_spd*sin_yaw_2;
+
+	// Now add the variance due to uncertainty in vehicle velocity that was used to calculate the initial wind speed
+	P[22][22] += P[4][4];
+	P[23][23] += P[5][5];
 }
