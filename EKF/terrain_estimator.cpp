@@ -47,9 +47,9 @@ bool Ekf::initHagl()
 	// get most recent range measurement from buffer
 	rangeSample latest_measurement = _range_buffer.get_newest();
 
-	if ((_time_last_imu - latest_measurement.time_us) < 2e5 && _R_to_earth(2,2) > 0.7071f) {
+	if ((_time_last_imu - latest_measurement.time_us) < 2e5 && _R_sens_to_earth_2_2 > 0.7071f) {
 		// if we have a fresh measurement, use it to initialise the terrain estimator
-		_terrain_vpos = _state.pos(2) + latest_measurement.rng * _R_to_earth(2, 2);
+		_terrain_vpos = _state.pos(2) + latest_measurement.rng * _R_sens_to_earth_2_2;
 		// initialise state variance to variance of measurement
 		_terrain_var = sq(_params.range_noise);
 		// success
@@ -88,9 +88,9 @@ void Ekf::predictHagl()
 void Ekf::fuseHagl()
 {
 	// If the vehicle is excessively tilted, do not try to fuse range finder observations
-	if (_R_to_earth(2, 2) > 0.7071f) {
+	if (_R_sens_to_earth_2_2 > 0.7071f) {
 		// get a height above ground measurement from the range finder assuming a flat earth
-		float meas_hagl = _range_sample_delayed.rng * _R_to_earth(2, 2);
+		float meas_hagl = _range_sample_delayed.rng * _R_sens_to_earth_2_2;
 
 		// predict the hagl from the vehicle position and terrain height
 		float pred_hagl = _terrain_vpos - _state.pos(2);
