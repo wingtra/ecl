@@ -211,12 +211,12 @@ bool Ekf::update()
 
 
 		// update range data contineous flag (5Hz ie 200 ms)
-		/* Timing */
+		/* Timing in micro seconds */
 		static hrt_abstime t = 0;
 		static hrt_abstime t_prev = 0;
 		static float dt = 0.0f;
 		t = hrt_absolute_time();
-		dt = t_prev != 0 ? (t - t_prev) * 0.000001f : 0.0f;
+		dt = t_prev != 0 ? (t - t_prev) * 1.0f : 0.0f;
 		t_prev = t;
 
 		static float range_update_interval = 0.0f;
