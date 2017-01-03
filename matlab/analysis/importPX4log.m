@@ -30,6 +30,7 @@ FORMAT_TO_STRUCT = {
     'i', {'int32', 1};
     'I', {'uint32', 1};
     'f', {'single', 1};
+    'd', {'double', 1};
     'n', {'char4', 1};
     'N', {'char16', 1};
     'Z', {'char64', 1};
@@ -38,7 +39,7 @@ FORMAT_TO_STRUCT = {
     'e', {'int32', 0.01};
     'E', {'uint32', 0.01};
     'L', {'int32', 0.0000001};
-    'M', {'int8', 1};
+    'M', {'uint8', 1};
     'q', {'int64', 1};
     'Q', {'uint64', 1}};
 
@@ -184,7 +185,7 @@ else
     elseif strcmp('single',format_type)
         dataLen = 4;
     end
-    data = typecast(uint8(byte_array(thisPtr:(thisPtr+dataLen-1))),format_type)*mult;
+    data = double(typecast(uint8(byte_array(thisPtr:(thisPtr+dataLen-1))),format_type))*mult;
 end
 end
 

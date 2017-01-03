@@ -51,7 +51,6 @@ struct gps_message {
 	float eph;                  // GPS horizontal position accuracy in m
 	float epv;                  // GPS vertical position accuracy in m
 	float sacc;                 // GPS speed accuracy in m/s
-	uint64_t time_usec_vel;     // Timestamp for velocity informations
 	float vel_m_s;              // GPS ground speed (m/s)
 	float vel_ned[3];           // GPS ground speed NED
 	bool vel_ned_valid;         // GPS ground speed is valid
@@ -69,6 +68,13 @@ struct flow_message {
 	Vector2f flowdata;			// Flow data received
 	Vector3f gyrodata;			// Gyro data from flow sensor
 	uint32_t dt;				// integration time of flow samples
+};
+
+struct ext_vision_message {
+	Vector3f posNED;  // measured NED position relative to the local origin (m)
+	Quaternion quat;  // measured quaternion orientation defining rotation from NED to body frame
+	float posErr;     // 1-Sigma spherical position accuracy (m)
+	float angErr;     // 1-Sigma angular error (rad)
 };
 
 struct outputSample {
@@ -126,10 +132,19 @@ struct flowSample {
 	uint64_t time_us; // timestamp in microseconds of the integration period mid-point
 };
 
+struct extVisionSample {
+	Vector3f posNED;  // measured NED position relative to the local origin (m)
+	Quaternion quat;  // measured quaternion orientation defining rotation from NED to body frame
+	float posErr;     // 1-Sigma spherical position accuracy (m)
+	float angErr;     // 1-Sigma angular error (rad)
+	uint64_t time_us; // timestamp of the measurement in microseconds
+};
+
 // Integer definitions for vdist_sensor_type
 #define VDIST_SENSOR_BARO  0	// Use baro height
 #define VDIST_SENSOR_GPS   1	// Use GPS height
 #define VDIST_SENSOR_RANGE 2	// Use range finder height
+#define VDIST_SENSOR_EV    3    // USe external vision
 
 // Bit locations for mag_declination_source
 #define MASK_USE_GEO_DECL   (1<<0)  // set to true to use the declination from the geo library when the GPS position becomes available, set to false to always use the EKF2_MAG_DECL value
@@ -140,6 +155,8 @@ struct flowSample {
 #define MASK_USE_GPS    (1<<0)  // set to true to use GPS data
 #define MASK_USE_OF     (1<<1)  // set to true to use optical flow data
 #define MASK_INHIBIT_ACC_BIAS (1<<2)  // set to true to inhibit estimation of accelerometer delta velocity bias
+#define MASK_USE_EVPOS	(1<<3)  // set to true to use external vision NED position data
+#define MASK_USE_EVYAW  (1<<4)	// set to true to use exernal vision quaternion data for yaw
 
 // Integer definitions for mag_fusion_type
 #define MAG_FUSE_TYPE_AUTO      0   // The selection of either heading or 3D magnetometer fusion will be automatic
@@ -150,6 +167,7 @@ struct flowSample {
 #define GPS_MAX_INTERVAL	5e5
 #define BARO_MAX_INTERVAL	2e5
 #define RNG_MAX_INTERVAL	2e5
+#define EV_MAX_INTERVAL		2e5
 
 struct parameters {
 	// measurement source control
@@ -163,6 +181,7 @@ struct parameters {
 	float airspeed_delay_ms;	// airspeed measurement delay relative to the IMU (msec)
 	float flow_delay_ms;		// optical flow measurement delay relative to the IMU (msec) - this is to the middle of the optical flow integration interval
 	float range_delay_ms;		// range finder measurement delay relative to the IMU (msec)
+	float ev_delay_ms;		// off-board vision measurement delay relative to the IMU (msec)
 
 	// input noise
 	float gyro_noise;		// IMU angular rate noise used for covariance prediction (rad/sec)
@@ -176,6 +195,11 @@ struct parameters {
 	float wind_vel_p_noise;		// process noise for wind velocity prediction (m/sec/sec)
 	float terrain_p_noise;		// process noise for terrain offset (m/sec)
 	float terrain_gradient;		// gradient of terrain used to estimate process noise due to changing position (m/m)
+
+	// initialisation errors
+	float switch_on_gyro_bias;	// 1-sigma gyro bias uncertainty at switch on (rad/sec)
+	float switch_on_accel_bias;	// 1-sigma accelerometer bias uncertainty at switch on (m/s**2)
+	float initial_tilt_err;		// 1-sigma tilt error after initial alignment using gravity vector (rad)
 
 	// position and velocity fusion
 	float gps_vel_noise;		// observation noise for gps velocity fusion (m/sec)
@@ -197,13 +221,17 @@ struct parameters {
 	int mag_fusion_type;		// integer used to specify the type of magnetometer fusion used
 
 	// airspeed fusion
-	float tas_innov_gate;		// True Airspeed Innovation consistency gate size in standard deciation [WHAT SHALL THIS VALUE BE?]
+	float tas_innov_gate;		// True Airspeed Innovation consistency gate size in standard deciation
   	float eas_noise;			// EAS measurement noise standard deviation used for airspeed fusion [m/s]
 
 	// range finder fusion
 	float range_noise;		// observation noise for range finder measurements (m)
 	float range_innov_gate;		// range finder fusion innovation consistency gate size (STD)
 	float rng_gnd_clearance;	// minimum valid value for range when on ground (m)
+	float range_noise_scaler;	// scaling from range measurement to noise (m/m)
+
+	// vision position fusion
+	float ev_innov_gate;		// vision estimator fusion innovation consistency gate size (STD)
 
 	// optical flow fusion
 	float flow_noise;		// observation noise for optical flow LOS rate measurements (rad/sec)
@@ -228,6 +256,14 @@ struct parameters {
 	Vector3f gps_pos_body;	// xyz position of the GPS antenna in body frame (m)
 	Vector3f rng_pos_body;	// xyz position of range sensor in body frame (m)
 	Vector3f flow_pos_body;	// xyz position of range sensor focal point in body frame (m)
+	Vector3f ev_pos_body;	// xyz position of VI-sensor focal point in body frame (m)
+
+	// output complementary filter tuning
+	float vel_Tau;	// velocity state correction time constant (1/sec)
+	float pos_Tau;	// postion state correction time constant (1/sec)
+
+	unsigned no_gps_timeout_max;	// maximum time we allow dead reckoning while both gps position and velocity measurements are being
+									// rejected
 
 	// Initialize parameter values.  Initialization must be accomplished in the constructor to allow C99 compiler compatibility.
 	parameters()
@@ -243,6 +279,7 @@ struct parameters {
 		airspeed_delay_ms = 200.0f;
 		flow_delay_ms = 5.0f;
 		range_delay_ms = 5.0f;
+		ev_delay_ms = 100.0f;
 
 		// input noise
 		gyro_noise = 1.5e-2f;
@@ -256,6 +293,11 @@ struct parameters {
 		wind_vel_p_noise = 1.0e-1f;
 		terrain_p_noise = 5.0f;
 		terrain_gradient = 0.5f;
+
+		// initialisation errors
+		switch_on_gyro_bias = 0.1f;
+		switch_on_accel_bias = 0.2f;
+		initial_tilt_err = 0.1f;
 
 		// position and velocity fusion
 		gps_vel_noise = 5.0e-1f;
@@ -277,13 +319,14 @@ struct parameters {
 		mag_fusion_type = 0;
 
 		// airspeed fusion
-		tas_innov_gate = 3.0f; // [CHECK THIS VALUE]		
+		tas_innov_gate = 5.0f;		
   		eas_noise = 1.4f;			
 
 		// range finder fusion
 		range_noise = 0.1f;
 		range_innov_gate = 5.0f;
 		rng_gnd_clearance = 0.1f;
+		range_noise_scaler = 0.1f;
 
 		// optical flow fusion
 		flow_noise = 0.15f;
@@ -307,6 +350,14 @@ struct parameters {
 		gps_pos_body = {};
 		rng_pos_body = {};
 		flow_pos_body = {};
+		ev_pos_body = {};
+
+		// output complementary filter tuning time constants
+		vel_Tau = 0.5f;
+		pos_Tau = 0.25f;
+
+		no_gps_timeout_max = 7e6;	// maximum seven seconds of dead reckoning time for gps
+
 	}
 };
 
@@ -314,8 +365,8 @@ struct stateSample {
 	Quaternion  quat_nominal; // quaternion defining the rotaton from earth to body frame
 	Vector3f    vel;	// NED velocity in earth frame in m/s
 	Vector3f    pos;	// NED position in earth frame in m
-	Vector3f    gyro_bias;	// gyro bias estimate in rad/s
-	Vector3f    accel_bias;	// accelerometer bias estimate in m/s
+	Vector3f    gyro_bias;	// delta angle bias estimate in rad
+	Vector3f    accel_bias;	// delta velocity bias estimate in m/s
 	Vector3f    mag_I;	// NED earth magnetic field in gauss
 	Vector3f    mag_B;	// magnetometer bias estimate in body frame in gauss
 	Vector2f    wind_vel;	// wind velocity in m/s
@@ -338,6 +389,25 @@ union fault_status_u {
 		bool bad_pos_N: 1;	// 12 - true if fusion of the North position has encountered a numerical error
 		bool bad_pos_E: 1;	// 13 - true if fusion of the East position has encountered a numerical error
 		bool bad_pos_D: 1;	// 14 - true if fusion of the Down position has encountered a numerical error
+	} flags;
+	uint16_t value;
+
+};
+
+// define structure used to communicate innovation test failures
+union innovation_fault_status_u {
+	struct {
+		bool reject_vel_NED: 1;		// 0 - true if velocity observations have been rejected
+		bool reject_pos_NE: 1;		// 1 - true if horizontal position observations have been rejected
+		bool reject_pos_D: 1;		// 2 - true if true if vertical position observations have been rejected
+		bool reject_mag_x: 1;		// 3 - true if the X magnetometer observation has been rejected
+		bool reject_mag_y: 1;		// 4 - true if the Y magnetometer observation has been rejected
+		bool reject_mag_z: 1;		// 5 - true if the Z magnetometer observation has been rejected
+		bool reject_yaw: 1;		// 6 - true if the yaw observation has been rejected
+		bool reject_airspeed: 1;	// 7 - true if the airspeed observation has been rejected
+		bool reject_hagl: 1;		// 8 - true if the height above ground observation has been rejected
+		bool reject_optflow_X: 1;	// 9 - true if the X optical flow observation has been rejected
+		bool reject_optflow_Y: 1;	// 10 - true if the Y optical flow observation has been rejected
 	} flags;
 	uint16_t value;
 
@@ -374,9 +444,29 @@ union filter_control_status_u {
 		uint16_t wind        : 1; // 8 - true when wind velocity is being estimated
 		uint16_t baro_hgt    : 1; // 9 - true when baro height is being fused as a primary height reference
 		uint16_t rng_hgt     : 1; // 10 - true when range finder height is being fused as a primary height reference
-		uint16_t gps_hgt     : 1; // 11 - true when range finder height is being fused as a primary height reference
+		uint16_t gps_hgt     : 1; // 11 - true when GPS height is being fused as a primary height reference
+		uint16_t ev_pos      : 1; // 12 - true when local position data from external vision is being fused
+		uint16_t ev_yaw      : 1; // 13 - true when yaw data from external vision measurements is being fused
+		uint16_t ev_hgt      : 1; // 14 - true when height data from external vision measurements is being fused
 	} flags;
 	uint16_t value;
+};
+
+union ekf_solution_status {
+    struct {
+	uint16_t attitude           : 1; // 0 - True if the attitude estimate is good
+	uint16_t velocity_horiz     : 1; // 1 - True if the horizontal velocity estimate is good
+	uint16_t velocity_vert      : 1; // 2 - True if the vertical velocity estimate is good
+	uint16_t pos_horiz_rel      : 1; // 3 - True if the horizontal position (relative) estimate is good
+	uint16_t pos_horiz_abs      : 1; // 4 - True if the horizontal position (absolute) estimate is good
+	uint16_t pos_vert_abs       : 1; // 5 - True if the vertical position (absolute) estimate is good
+	uint16_t pos_vert_agl       : 1; // 6 - True if the vertical position (above ground) estimate is good
+	uint16_t const_pos_mode     : 1; // 7 - True if the EKF is in a constant position mode and is not using external measurements (eg GPS or optical flow)
+	uint16_t pred_pos_horiz_rel : 1; // 8 - True if the EKF has sufficient data to enter a mode that will provide a (relative) position estimate
+	uint16_t pred_pos_horiz_abs : 1; // 9 - True if the EKF has sufficient data to enter a mode that will provide a (absolute) position estimate
+	uint16_t gps_glitch         : 1; // 10 - True if the EKF has detected a GPS glitch
+    } flags;
+    uint16_t value;
 };
 
 }

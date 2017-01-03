@@ -47,9 +47,10 @@ bool Ekf::initHagl()
 	// get most recent range measurement from buffer
 	rangeSample latest_measurement = _range_buffer.get_newest();
 
-	if ((_time_last_imu - latest_measurement.time_us) < 2e5) {
+	// If we are in the air then we require fresh data, tilt within limits and continuous data to initialise the filter
+	if ((_time_last_imu - latest_measurement.time_us) < 2e5 && _R_to_earth_hov(2,2) > 0.7071f && _range_data_continuous) {
 		// if we have a fresh measurement, use it to initialise the terrain estimator
-		_terrain_vpos = _state.pos(2) + latest_measurement.rng;
+		_terrain_vpos = _state.pos(2) + latest_measurement.rng * _R_to_earth_hov(2, 2);
 		// initialise state variance to variance of measurement
 		_terrain_var = sq(_params.range_noise);
 		// success
@@ -88,9 +89,9 @@ void Ekf::predictHagl()
 void Ekf::fuseHagl()
 {
 	// If the vehicle is excessively tilted, do not try to fuse range finder observations
-	if (_R_to_earth(2, 2) > 0.7071f) {
+	if (_R_to_earth_hov(2, 2) > 0.7071f) {
 		// get a height above ground measurement from the range finder assuming a flat earth
-		float meas_hagl = _range_sample_delayed.rng * _R_to_earth(2, 2);
+		float meas_hagl = _range_sample_delayed.rng * _R_to_earth_hov(2, 2);
 
 		// predict the hagl from the vehicle position and terrain height
 		float pred_hagl = _terrain_vpos - _state.pos(2);
@@ -99,26 +100,30 @@ void Ekf::fuseHagl()
 		_hagl_innov = pred_hagl - meas_hagl;
 
 		// calculate the observation variance adding the variance of the vehicles own height uncertainty and factoring in the effect of tilt on measurement error
-		float obs_variance = fmaxf(P[8][8], 0.0f) + sq(_params.range_noise / _R_to_earth(2, 2));
+		float obs_variance = fmaxf(P[9][9], 0.0f) + (sq(_params.range_noise) + sq(_params.range_noise_scaler * _range_sample_delayed.rng)) * sq(_R_to_earth_hov(2, 2));
 
 		// calculate the innovation variance - limiting it to prevent a badly conditioned fusion
 		_hagl_innov_var = fmaxf(_terrain_var + obs_variance, obs_variance);
 
 		// perform an innovation consistency check and only fuse data if it passes
 		float gate_size = fmaxf(_params.range_innov_gate, 1.0f);
-		float test_ratio = sq(_hagl_innov) / (sq(gate_size) * _hagl_innov_var);
+		_terr_test_ratio = sq(_hagl_innov) / (sq(gate_size) * _hagl_innov_var);
 
-		if (test_ratio <= 1.0f) {
+		if (_terr_test_ratio <= 1.0f) {
 			// calculate the Kalman gain
 			float gain = _terrain_var / _hagl_innov_var;
 			// correct the state
 			_terrain_vpos -= gain * _hagl_innov;
 			// correct the variance
 			_terrain_var = fmaxf(_terrain_var * (1.0f - gain), 0.0f);
-			// record last successful fusion time
+			// record last successful fusion event
 			_time_last_hagl_fuse = _time_last_imu;
-		}
+			_innov_check_fail_status.flags.reject_hagl = false;
 
+		} else {
+			_innov_check_fail_status.flags.reject_hagl = true;
+
+		}
 
 	} else {
 		return;
@@ -132,13 +137,33 @@ bool Ekf::get_terrain_vert_pos(float *ret)
 	memcpy(ret, &_terrain_vpos, sizeof(float));
 
 	// The height is useful if the uncertainty in terrain height is significantly smaller than than the estimated height above terrain
-	bool accuracy_useful = (sqrtf(_terrain_var) < 0.2f * fmaxf((_terrain_vpos - _state.pos(2)), _params.rng_gnd_clearance));
+	// WINGTRA: Got rid of variance based accuracy check because we trust measurement data when continuous, and lpos variance
+	// based check below is found to be too tight when cloudy etc or doing handheld tests.
+	// bool accuracy_useful = (sqrtf(_terrain_var) < 0.2f * fmaxf((_terrain_vpos - _state.pos(2)), _params.rng_gnd_clearance));
 
-	if (_time_last_imu - _time_last_hagl_fuse < 1e6 || accuracy_useful) {
+	if (_terrain_initialised && _range_data_continuous) {
 		return true;
 
 	} else {
 		return false;
+
+	}
+}
+
+// return true if the estimate is valid
+// return the estimated terrain vertical position 1-std error in m
+bool Ekf::get_terrain_vert_err(float *ret)
+{
+	float temp = sqrtf(_terrain_var);
+	memcpy(ret, &temp, sizeof(float));
+
+	// the estimator must be initialised to provide a valid variance
+	if (_terrain_initialised) {
+		return true;
+
+	} else {
+		return false;
+
 	}
 }
 
