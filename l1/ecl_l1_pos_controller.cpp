@@ -146,7 +146,7 @@ void ECL_L1_Pos_Controller::navigate_waypoints(const math::Vector<2> &vector_A, 
 
 	} else {
 		/* extension from [2], fly directly to A */
-		if (distance_A_to_airplane > _L1_distance && alongTrackDist / math::max(distance_A_to_airplane , 1.0f) < -0.7071f) {
+		if (distance_A_to_airplane > _L1_distance && alongTrackDist / math::max(distance_A_to_airplane, 1.0f) < -1.0f * M_SQRT1_2_F) {  // correstponds to sin(pi/4)
 
 			/* calculate eta to fly to waypoint A */
 
@@ -205,7 +205,7 @@ void ECL_L1_Pos_Controller::navigate_waypoints(const math::Vector<2> &vector_A, 
 			//if (_L1_distance < fabsf(xtrackErr)) _L1_distance = fabsf(xtrackErr); //not necessary if 45 degree approach imposed below
 			float sine_eta1 = xtrackErr / _L1_distance;
 			/* limit output to 45 degrees */
-			sine_eta1 = math::constrain(sine_eta1, -0.7071f, 0.7071f); //sin(pi/4) = 0.7071
+			sine_eta1 = math::constrain(sine_eta1, -1.0f * M_SQRT1_2_F, M_SQRT1_2_F); //sin(pi/4) = M_SQRT1_2_F
 			float eta1 = asinf(sine_eta1);
 			eta = eta1 + eta2;
 			/* bearing from current position to L1 point */
@@ -281,7 +281,7 @@ void ECL_L1_Pos_Controller::navigate_loiter(const math::Vector<2> &vector_A,
 	_L1_distance = _L1_ratio * ground_speed;
 
 	/* check circle tracking feasibility */
-	if (_L1_distance / radius > 1  && ground_speed > 0) {
+	if (_L1_distance / radius > 1.0f  && ground_speed > 0.0f) {
 		/* reduce period, recalculate L1 ratio & distance */
 		_L1_ratio = radius / ground_speed;
 		_L1_distance = _L1_ratio * ground_speed;
@@ -364,7 +364,7 @@ void ECL_L1_Pos_Controller::navigate_loiter(const math::Vector<2> &vector_A,
 	}
 
 	/* limit angle to +-90 degrees */
-	eta = math::constrain(eta, (-M_PI_F) / 2.0f, +M_PI_F / 2.0f);
+	eta = math::constrain(eta, (-1.0f * M_PI_F) / 2.0f, M_PI_F / 2.0f);
 	_lateral_accel = _K_L1 * ground_speed / _L1_ratio * sinf(eta);
 
 	_circle_mode = true;
@@ -441,7 +441,7 @@ bool ECL_L1_Pos_Controller::checkBearingTarget(float bearing, float bnd_min, flo
 {
 	/* ASSUMES POSITIVE (CLOCKWISE) BND SWEEP FROM MIN TO MAX AND ALL BEARINGS BETWEEN -PI AND PI */
 	if (bnd_min > bnd_max) {
-		return (bearing >= -M_PI_F && bearing <= bnd_max) || (bearing >= bnd_min && bearing <= M_PI_F);
+		return (bearing >= -1.0f * M_PI_F && bearing <= bnd_max) || (bearing >= bnd_min && bearing <= M_PI_F);
 
 	} else {
 		return (bearing >= bnd_min && bearing <= bnd_max);
