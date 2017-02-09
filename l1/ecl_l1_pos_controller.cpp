@@ -104,6 +104,9 @@ void ECL_L1_Pos_Controller::navigate_waypoints(const math::Vector<2> &vector_A, 
 	/* calculate ground speed */
 	float ground_speed = ground_speed_vector.length();
 
+	/* Reset L1 ratio as it might have been changed during loitering */
+	_L1_ratio = 1.0f / M_PI_F * _L1_damping * _L1_period;
+
 	/* calculate the L1 length required for the desired period */
 	_L1_distance = _L1_ratio * ground_speed;
 
