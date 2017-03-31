@@ -347,7 +347,7 @@ struct parameters {
 		range_noise = 0.1f;
 		range_innov_gate = 5.0f;
 		rng_gnd_clearance = 0.1f;
-		rng_sens_pitch = 0.0f;
+		rng_sens_pitch = -1.5708f; // WINGTRA
 		range_noise_scaler = 0.0f;
 
 		// vision position fusion
