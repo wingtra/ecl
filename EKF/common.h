@@ -119,7 +119,7 @@ struct rangeSample {
 
 struct airspeedSample {
 	float       true_airspeed;	// true airspeed measurement in m/s
-	float 		eas2tas;		// equivalent to true airspeed factor 
+	float 		eas2tas;		// equivalent to true airspeed factor
 	uint64_t    time_us;	// timestamp in microseconds
 };
 
@@ -173,6 +173,7 @@ struct parameters {
 	// measurement source control
 	int fusion_mode;		// bitmasked integer that selects which of the GPS and optical flow aiding sources will be used
 	int vdist_sensor_type;		// selects the primary source for height data
+	int sensor_interval_min_ms;	// minimum time of arrival difference between non IMU sensor updates. Sets the size of the observation buffers.
 
 	// measurement time delays
 	float mag_delay_ms;		// magnetometer measurement delay relative to the IMU (msec)
@@ -224,10 +225,16 @@ struct parameters {
 	float tas_innov_gate;		// True Airspeed Innovation consistency gate size in standard deciation
   	float eas_noise;			// EAS measurement noise standard deviation used for airspeed fusion [m/s]
 
+  	// synthetic sideslip fusion
+ 	float beta_innov_gate;		// synthetic sideslip innovation consistency gate size in standard deviation (STD)
+ 	float beta_noise;			// synthetic sideslip noise (rad)
+ 	float beta_avg_ft_us;		// The average time between synthetic sideslip measurements (usec)
+
 	// range finder fusion
 	float range_noise;		// observation noise for range finder measurements (m)
 	float range_innov_gate;		// range finder fusion innovation consistency gate size (STD)
 	float rng_gnd_clearance;	// minimum valid value for range when on ground (m)
+	float rng_sens_pitch;		// Pitch offset of the range sensor (rad). Sensor points out along Z axis when offset is zero. Positive rotation is RH about Y axis.
 	float range_noise_scaler;	// scaling from range measurement to noise (m/m)
 
 	// vision position fusion
@@ -262,8 +269,16 @@ struct parameters {
 	float vel_Tau;	// velocity state correction time constant (1/sec)
 	float pos_Tau;	// postion state correction time constant (1/sec)
 
+	// accel bias learning control
+	float acc_bias_lim;		// maximum accel bias magnitude (m/s/s)
+	float acc_bias_learn_acc_lim;	// learning is disabled if the magnitude of the IMU acceleration vector is greeater than this (m/sec**2)
+	float acc_bias_learn_gyr_lim;	// learning is disabled if the magnitude of the IMU angular rate vector is greeater than this (rad/sec)
+	float acc_bias_learn_tc;	// time constant used to control the decaying envelope filters applied to the accel and gyro magnitudes (sec)
+
 	unsigned no_gps_timeout_max;	// maximum time we allow dead reckoning while both gps position and velocity measurements are being
-									// rejected
+					// rejected before attempting to reset the states to the GPS measurement (usec)
+	unsigned no_aid_timeout_max;	// maximum lapsed time from last fusion of measurements that constrain drift before
+					// the EKF will report that it is dead-reckoning (usec)
 
 	// Initialize parameter values.  Initialization must be accomplished in the constructor to allow C99 compiler compatibility.
 	parameters()
@@ -271,6 +286,7 @@ struct parameters {
 		// measurement source control
 		fusion_mode = MASK_USE_GPS;
 		vdist_sensor_type = VDIST_SENSOR_BARO;
+		sensor_interval_min_ms = 20;
 
 		// measurement time delays
 		mag_delay_ms = 0.0f;
@@ -319,14 +335,23 @@ struct parameters {
 		mag_fusion_type = 0;
 
 		// airspeed fusion
-		tas_innov_gate = 5.0f;		
-  		eas_noise = 1.4f;			
+		tas_innov_gate = 5.0f;
+  		eas_noise = 1.4f;
+
+		// synthetic sideslip fusion
+ 		beta_innov_gate = 5.0f;
+		beta_noise = 0.3f;
+ 		beta_avg_ft_us = 1000000.0f; //1 Hz
 
 		// range finder fusion
 		range_noise = 0.1f;
 		range_innov_gate = 5.0f;
 		rng_gnd_clearance = 0.1f;
-		range_noise_scaler = 0.1f;
+		rng_sens_pitch = 0.0f;
+		range_noise_scaler = 0.0f;
+
+		// vision position fusion
+		ev_innov_gate = 5.0f;
 
 		// optical flow fusion
 		flow_noise = 0.15f;
@@ -353,10 +378,18 @@ struct parameters {
 		ev_pos_body = {};
 
 		// output complementary filter tuning time constants
-		vel_Tau = 0.5f;
+		vel_Tau = 0.25f;
 		pos_Tau = 0.25f;
 
-		no_gps_timeout_max = 7e6;	// maximum seven seconds of dead reckoning time for gps
+		// accel bias state limiting
+		acc_bias_lim = 0.4f;
+		acc_bias_learn_acc_lim = 25.0f;
+		acc_bias_learn_gyr_lim = 3.0f;
+		acc_bias_learn_tc = 0.5f;
+
+		// dead reckoning timers
+		no_gps_timeout_max = 7e6;
+		no_aid_timeout_max = 1e6;
 
 	}
 };
@@ -389,6 +422,7 @@ union fault_status_u {
 		bool bad_pos_N: 1;	// 12 - true if fusion of the North position has encountered a numerical error
 		bool bad_pos_E: 1;	// 13 - true if fusion of the East position has encountered a numerical error
 		bool bad_pos_D: 1;	// 14 - true if fusion of the Down position has encountered a numerical error
+		bool bad_acc_bias: 1;	// 15 - true if bad delta velocity bias estimates have been detected
 	} flags;
 	uint16_t value;
 
@@ -405,9 +439,10 @@ union innovation_fault_status_u {
 		bool reject_mag_z: 1;		// 5 - true if the Z magnetometer observation has been rejected
 		bool reject_yaw: 1;		// 6 - true if the yaw observation has been rejected
 		bool reject_airspeed: 1;	// 7 - true if the airspeed observation has been rejected
-		bool reject_hagl: 1;		// 8 - true if the height above ground observation has been rejected
-		bool reject_optflow_X: 1;	// 9 - true if the X optical flow observation has been rejected
-		bool reject_optflow_Y: 1;	// 10 - true if the Y optical flow observation has been rejected
+		bool reject_sideslip: 1;	// 8 - true if the synthetic sideslip observation has been rejected
+		bool reject_hagl: 1;		// 9 - true if the height above ground observation has been rejected
+		bool reject_optflow_X: 1;	// 10 - true if the X optical flow observation has been rejected
+		bool reject_optflow_Y: 1;	// 11 - true if the Y optical flow observation has been rejected
 	} flags;
 	uint16_t value;
 
@@ -448,6 +483,7 @@ union filter_control_status_u {
 		uint16_t ev_pos      : 1; // 12 - true when local position data from external vision is being fused
 		uint16_t ev_yaw      : 1; // 13 - true when yaw data from external vision measurements is being fused
 		uint16_t ev_hgt      : 1; // 14 - true when height data from external vision measurements is being fused
+		uint16_t fuse_beta   : 1; // 15 - true when synthetic sideslip measurements are being fused
 	} flags;
 	uint16_t value;
 };

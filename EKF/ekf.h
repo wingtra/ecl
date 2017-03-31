@@ -48,7 +48,7 @@ class Ekf : public EstimatorInterface
 public:
 
 	Ekf();
-	~Ekf();
+	~Ekf() = default;
 
 	// initialise variables to sane values (also interface class)
 	bool init(uint64_t timestamp);
@@ -79,6 +79,12 @@ public:
 	// gets the innovation variance of the airspeed measurement
 	void get_airspeed_innov_var(float *airspeed_innov_var);
 
+	// gets the innovations of synthetic sideslip measurement
+ 	void get_beta_innov(float *beta_innov);
+
+ 	// gets the innovation variance of the synthetic sideslip measurement
+ 	void get_beta_innov_var(float *beta_innov_var);
+
 	// gets the innovation variance of the heading measurement
 	void get_heading_innov_var(float *heading_innov_var);
 
@@ -108,25 +114,43 @@ public:
 	bool collect_imu(imuSample &imu);
 
 	// get the ekf WGS-84 origin position and height and the system time it was last set
-	void get_ekf_origin(uint64_t *origin_time, map_projection_reference_s *origin_pos, float *origin_alt);
+	// return true if the origin is valid
+	bool get_ekf_origin(uint64_t *origin_time, map_projection_reference_s *origin_pos, float *origin_alt);
 
 	// get the 1-sigma horizontal and vertical position uncertainty of the ekf WGS-84 position
-	void get_ekf_accuracy(float *ekf_eph, float *ekf_epv, bool *dead_reckoning);
+	void get_ekf_gpos_accuracy(float *ekf_eph, float *ekf_epv, bool *dead_reckoning);
+
+	// get the 1-sigma horizontal and vertical position uncertainty of the ekf local position
+	void get_ekf_lpos_accuracy(float *ekf_eph, float *ekf_epv, bool *dead_reckoning);
+
+	// get the 1-sigma horizontal and vertical velocity uncertainty
+	void get_ekf_vel_accuracy(float *ekf_evh, float *ekf_evv, bool *dead_reckoning);
 
 	void get_vel_var(Vector3f &vel_var);
 
 	void get_pos_var(Vector3f &pos_var);
 
+	// return an array containing the output predictor angular, velocity and position tracking
+	// error magnitudes (rad), (m/s), (m)
+	void get_output_tracking_error(float error[3]);
+
+	/*
+	Returns  following IMU vibration metrics in the following array locations
+	0 : Gyro delta angle coning metric = filtered length of (delta_angle x prev_delta_angle)
+	1 : Gyro high frequency vibe = filtered length of (delta_angle - prev_delta_angle)
+	2 : Accel high frequency vibe = filtered length of (delta_velocity - prev_delta_velocity)
+	*/
+	void get_imu_vibe_metrics(float vibe[3]);
+
 	// return true if the global position estimate is valid
 	bool global_position_is_valid();
+
+	// return true if the EKF is dead reckoning the position using inertial data only
+	bool inertial_dead_reckoning();
 
 	// return true if the etimate is valid
 	// return the estimated terrain vertical position relative to the NED origin
 	bool get_terrain_vert_pos(float *ret);
-
-	// return true if the estimate is valid
-	// return the estimated terrain vertical position 1-std error in m
-	bool get_terrain_vert_err(float *ret);
 
 	// get the accerometer bias in m/s/s
 	void get_accel_bias(float bias[3]);
@@ -177,7 +201,6 @@ private:
 	static const uint8_t _k_num_states = 24;
 	static const float _k_earth_rate;
 	static const float _gravity_mss;
-	static const float _pi_div_2;
 
 	// reset event monitoring
 	// structure containing velocity, position, height and yaw reset information
@@ -195,6 +218,8 @@ private:
 	} _state_reset_status;
 
 	float _dt_ekf_avg;		// average update rate of the ekf
+	float _dt_update;		// delta time since last ekf update. This time can be used for filters
+					// which run at the same rate as the Ekf::update() function
 
 	stateSample _state;		// state struct of the ekf running at the delayed time horizon
 
@@ -222,44 +247,50 @@ private:
 	uint64_t _time_last_hgt_fuse;   // time the last fusion of height measurements was performed (usec)
 	uint64_t _time_last_of_fuse;    // time the last fusion of optical flow measurements were performed (usec)
 	uint64_t _time_last_arsp_fuse;	// time the last fusion of airspeed measurements were performed (usec)
+	uint64_t _time_last_beta_fuse;	// time the last fusion of synthetic sideslip measurements were performed (usec)
 	Vector2f _last_known_posNE;     // last known local NE position vector (m)
 	float _last_disarmed_posD;      // vertical position recorded at arming (m)
-	float _last_dt_overrun;		// the amount of time the last IMU collection over-ran the target set by FILTER_UPDATE_PERIOD_MS (sec)
+	float _imu_collection_time_adj;	// the amount of time the IMU collection needs to be advanced to meet the target set by FILTER_UPDATE_PERIOD_MS (sec)
+
+	uint64_t _time_acc_bias_check;	// last time the  accel bias check passed (usec)
 
 	Vector3f _earth_rate_NED;	// earth rotation vector (NED) in rad/s
 
 	matrix::Dcm<float> _R_to_earth;	// transformation matrix from body frame to earth frame from last EKF predition
-	matrix::Dcm<float> _R_to_earth_hov;	// transformation matrix from body frame with unity at HOVER ideal regime to earth frame from last EKF predition
 
-	float P[_k_num_states][_k_num_states];	// state covariance matrix
-	float KH[_k_num_states][_k_num_states]; // intermediate variable for the covariance update
-	float KHP[_k_num_states][_k_num_states]; // intermediate variable for the covariance update
+	float P[_k_num_states][_k_num_states]{};	// state covariance matrix
 
-	float _vel_pos_innov[6];	// innovations: 0-2 vel,  3-5 pos
-	float _vel_pos_innov_var[6];	// innovation variances: 0-2 vel, 3-5 pos
+	float _vel_pos_innov[6]{};	// innovations: 0-2 vel,  3-5 pos
+	float _vel_pos_innov_var[6]{};	// innovation variances: 0-2 vel, 3-5 pos
 
-	float _mag_innov[3];		// earth magnetic field innovations
-	float _mag_innov_var[3];	// earth magnetic field innovation variance
+	float _mag_innov[3]{};		// earth magnetic field innovations
+	float _mag_innov_var[3]{};	// earth magnetic field innovation variance
 
 	float _airspeed_innov;		// airspeed measurement innovation
 	float _airspeed_innov_var;	// airspeed measurement innovation variance
+
+	float _beta_innov;		// synthetic sideslip measurement innovation
+ 	float _beta_innov_var;	// synthetic sideslip measurement innovation variance
 
 	float _heading_innov;		// heading measurement innovation
 	float _heading_innov_var;	// heading measurement innovation variance
 
 	// optical flow processing
-	float _flow_innov[2];		// flow measurement innovation
-	float _flow_innov_var[2];	// flow innovation variance
+	float _flow_innov[2]{};		// flow measurement innovation
+	float _flow_innov_var[2]{};	// flow innovation variance
 	Vector3f _flow_gyro_bias;	// bias errors in optical flow sensor rate gyro outputs
 	Vector3f _imu_del_ang_of;	// bias corrected delta angle measurements accumulated across the same time frame as the optical flow rates
 	float _delta_time_of;		// time in sec that _imu_del_ang_of was accumulated over
 
 	float _mag_declination;		// magnetic declination used by reset and fusion functions (rad)
 
-	// complementary filter states
+	// output predictor states
 	Vector3f _delta_angle_corr;	// delta angle correction vector
 	imuSample _imu_down_sampled;	// down sampled imu data (sensor rate -> filter update rate)
 	Quaternion _q_down_sampled;	// down sampled quaternion (tracking delta angles between ekf update steps)
+	Vector3f _vel_err_integ;	// integral of velocity tracking error
+	Vector3f _pos_err_integ;	// integral of position tracking error
+	float _output_tracking_error[3]{};// contains the magnitude of the angle, velocity and position track errors (rad, m/s, m)
 
 	// variables used for the GPS quality checks
 	float _gpsDriftVelN;		// GPS north position derivative (m/s)
@@ -288,7 +319,12 @@ private:
 	// Variables used to control activation of post takeoff functionality
 	float _last_on_ground_posD; // last vertical position when the in_air status was false (m)
 
-	gps_check_fail_status_u _gps_check_fail_status;
+	gps_check_fail_status_u _gps_check_fail_status{};
+
+	// variables used to inhibit accel bias learning
+	bool _accel_bias_inhibit;	// true when the accel bias learning is being inhibited
+	float _accel_mag_filt;		// acceleration magnitude after application of a decaying envelope filter (m/sec**2)
+	float _ang_rate_mag_filt;	// angular rate magnitude after application of a decaying envelope filter (rad/sec)
 
 	// Terrain height state estimation
 	float _terrain_vpos;		// estimated vertical position of the terrain underneath the vehicle in local NED frame (m)
@@ -297,6 +333,12 @@ private:
 	float _hagl_innov_var;		// innovation variance for the last height above terrain measurement (m^2)
 	uint64_t _time_last_hagl_fuse;	// last system time in usec that the hagl measurement failed it's checks
 	bool _terrain_initialised;	// true when the terrain estimator has been intialised
+	float _sin_tilt_rng;		// sine of the range finder tilt rotation about the Y body axis
+	float _cos_tilt_rng;		// cosine of the range finder tilt rotation about the Y body axis
+	float _R_rng_to_earth_2_2;	// 2,2 element of the rotation matrix from sensor frame to earth frame
+	bool _range_data_continuous;	// true when we are receiving range finder data faster than a 2Hz average
+	float _dt_last_range_update_filt_us;	// filtered value of the delta time elapsed since the last range measurement came into
+						// the filter (microseconds)
 
 	// height sensor fault status
 	bool _baro_hgt_faulty;		// true if valid baro data is unavailable for use
@@ -335,6 +377,9 @@ private:
 	// fuse airspeed measurement
 	void fuseAirspeed();
 
+	// fuse synthetic zero sideslip measurement
+ 	void fuseSideslip();
+
 	// fuse velocity and position measurements (also barometer height)
 	void fuseVelPosHeight();
 
@@ -351,8 +396,8 @@ private:
 	// return true if the initialisation is successful
 	bool initHagl();
 
-	// predict the terrain vertical position state and variance
-	void predictHagl();
+	// run the terrain estimator
+	void runTerrainEstimator();
 
 	// update the terrain vertical position estimate using a height above ground measurement from the range finder
 	void fuseHagl();
@@ -413,6 +458,9 @@ private:
 	// control fusion of air data observations
 	void controlAirDataFusion();
 
+	// control fusion of synthetic sideslip observations
+	void controlBetaFusion();
+
 	// control fusion of pressure altitude observations
 	void controlBaroFusion();
 
@@ -451,5 +499,8 @@ private:
 
 	// perform a reset of the wind states
 	void resetWindStates();
+
+	// check that the range finder data is continuous
+	void checkRangeDataContinuity();
 
 };
