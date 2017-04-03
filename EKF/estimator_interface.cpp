@@ -379,7 +379,7 @@ bool EstimatorInterface::initialise_interface(uint64_t timestamp)
 
 	*/
 	_imu_buffer_length = 19;
-	_obs_buffer_length = 5;
+	_obs_buffer_length = 10;
 
 	// WINGTRA: End
 
