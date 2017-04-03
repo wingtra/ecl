@@ -378,8 +378,8 @@ bool EstimatorInterface::initialise_interface(uint64_t timestamp)
 	_obs_buffer_length = math::min(_obs_buffer_length,_imu_buffer_length);
 
 	*/
-	_imu_buffer_length = 18;
-	_obs_buffer_length = 6;
+	_imu_buffer_length = 19;
+	_obs_buffer_length = 5;
 
 	// WINGTRA: End
 
