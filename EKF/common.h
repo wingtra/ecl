@@ -287,13 +287,13 @@ struct parameters {
 		// measurement source control
 		fusion_mode = MASK_USE_GPS;
 		vdist_sensor_type = VDIST_SENSOR_BARO;
-		sensor_interval_min_ms = 20;
+		sensor_interval_min_ms = 40; // WINGTRA
 
 		// measurement time delays
 		mag_delay_ms = 0.0f;
 		baro_delay_ms = 0.0f;
-		gps_delay_ms = 200.0f;
-		airspeed_delay_ms = 200.0f;
+		gps_delay_ms = 85.0f; // WINGTRA
+		airspeed_delay_ms = 40.0f; // WINGTRA
 		flow_delay_ms = 5.0f;
 		range_delay_ms = 5.0f;
 		ev_delay_ms = 100.0f;
