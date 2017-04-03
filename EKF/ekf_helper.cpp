@@ -357,14 +357,11 @@ bool Ekf::resetMagHeading(Vector3f &mag_init)
 			matrix::Dcm<float> R_to_earth_ev(_ev_sample_delayed.quat);	// transformation matrix from body to world frame
 			// calculate the yaw angle for a 312 sequence
 			euler321(2) = atan2f(R_to_earth_ev(1, 0) , R_to_earth_ev(0, 0));
-		} else if (_params.mag_fusion_type <= MAG_FUSE_TYPE_3D) {
+		} else {
 			// rotate the magnetometer measurements into earth frame using a zero yaw angle
 			Vector3f mag_earth_pred = R_to_earth * _mag_sample_delayed.mag;
 			// the angle of the projection onto the horizontal gives the yaw angle
 			euler321(2) = -atan2f(mag_earth_pred(1), mag_earth_pred(0)) + _mag_declination;
-		} else {
-			// there is no yaw observation
-			return false;
 		}
 
 		// calculate initial quaternion states for the ekf
@@ -409,14 +406,11 @@ bool Ekf::resetMagHeading(Vector3f &mag_init)
 			matrix::Dcm<float> R_to_earth_ev(_ev_sample_delayed.quat);	// transformation matrix from body to world frame
 			// calculate the yaw angle for a 312 sequence
 			euler312(0) = atan2f(-R_to_earth_ev(0, 1) , R_to_earth_ev(1, 1));
-		} else if (_params.mag_fusion_type <= MAG_FUSE_TYPE_3D) {
+		} else {
 			// rotate the magnetometer measurements into earth frame using a zero yaw angle
 			Vector3f mag_earth_pred = R_to_earth * _mag_sample_delayed.mag;
 			// the angle of the projection onto the horizontal gives the yaw angle
 			euler312(0) = -atan2f(mag_earth_pred(1), mag_earth_pred(0)) + _mag_declination;
-		} else {
-			// there is no yaw observation
-			return false;
 		}
 
 		// re-calculate the rotation matrix using the updated yaw angle
@@ -444,7 +438,7 @@ bool Ekf::resetMagHeading(Vector3f &mag_init)
 	if (_params.fusion_mode & MASK_USE_EVYAW) {
 		// using error estimate from external vision data
 		angle_err_var_vec(2) = sq(fmaxf(_ev_sample_delayed.angErr, 1.0e-2f));
-	} else if (_params.mag_fusion_type <= MAG_FUSE_TYPE_3D) {
+	} else {
 		// using magnetic heading tuning parameter
 		angle_err_var_vec(2) = sq(fmaxf(_params.mag_heading_noise, 1.0e-2f));
 	}

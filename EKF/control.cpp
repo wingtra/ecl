@@ -861,7 +861,7 @@ void Ekf::controlMagFusion()
 
 		// Determine if we should use simple magnetic heading fusion which works better when there are large external disturbances
 		// or the more accurate 3-axis fusion
-		if (_params.mag_fusion_type == MAG_FUSE_TYPE_AUTO) {
+		if (_params.mag_fusion_type == MAG_FUSE_TYPE_AUTO || _params.mag_fusion_type == MAG_FUSE_TYPE_AUTOFW) {
 			// start 3D fusion if in-flight and height has increased sufficiently
 			// to be away from ground magnetic anomalies
 			// don't switch back to heading fusion until we are back on the ground
