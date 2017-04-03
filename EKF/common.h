@@ -333,7 +333,7 @@ struct parameters {
 		heading_innov_gate = 2.6f;
 		mag_innov_gate = 3.0f;
 		mag_declination_source = 7;
-		mag_fusion_type = 0;
+		mag_fusion_type = 3; // WINGTRA
 
 		// airspeed fusion
 		tas_innov_gate = 5.0f;
