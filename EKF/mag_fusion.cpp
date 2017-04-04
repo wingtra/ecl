@@ -163,15 +163,6 @@ void Ekf::fuseMag()
 		return;
 	}
 
-	/*
-	When flying as a fixed wing aircraft, a misaligned magnetometer can cause an error in pitch/roll and accel bias estimates.
-	When MAG_FUSE_TYPE_AUTOFW is selected and the vehicle is flying as a fixed wing as detected by the use of wind estimation
-	and current airspeed estimates, then magnetometer fusion is only allowed to access the magnetic field states.
-	*/
-	bool update_mag_states_only = (_params.mag_fusion_type == MAG_FUSE_TYPE_AUTOFW)
-			&& _control_status.flags.wind
-			&& (_time_last_imu - _time_last_airspeed < 1E7);
-
 	// update the states and covariance using sequential fusion of the magnetometer components
 	for (uint8_t index = 0; index <= 2; index++) {
 
@@ -196,7 +187,7 @@ void Ekf::fuseMag()
 			SK_MX[3] = 2.0f*q0*q2 - 2.0f*q1*q3;
 			SK_MX[4] = 2.0f*q0*q3 + 2.0f*q1*q2;
 
-			if (!update_mag_states_only) {
+			if (!_update_mag_states_only) {
 				Kfusion[0] = SK_MX[0]*(P[0][19] + P[0][1]*SH_MAG[0] - P[0][2]*SH_MAG[1] + P[0][3]*SH_MAG[2] + P[0][0]*SK_MX[2] - P[0][16]*SK_MX[1] + P[0][17]*SK_MX[4] - P[0][18]*SK_MX[3]);
 				Kfusion[1] = SK_MX[0]*(P[1][19] + P[1][1]*SH_MAG[0] - P[1][2]*SH_MAG[1] + P[1][3]*SH_MAG[2] + P[1][0]*SK_MX[2] - P[1][16]*SK_MX[1] + P[1][17]*SK_MX[4] - P[1][18]*SK_MX[3]);
 				Kfusion[2] = SK_MX[0]*(P[2][19] + P[2][1]*SH_MAG[0] - P[2][2]*SH_MAG[1] + P[2][3]*SH_MAG[2] + P[2][0]*SK_MX[2] - P[2][16]*SK_MX[1] + P[2][17]*SK_MX[4] - P[2][18]*SK_MX[3]);
@@ -250,7 +241,7 @@ void Ekf::fuseMag()
 			SK_MY[3] = 2.0f*q0*q3 - 2.0f*q1*q2;
 			SK_MY[4] = 2.0f*q0*q1 + 2.0f*q2*q3;
 
-			if (!update_mag_states_only) {
+			if (!_update_mag_states_only) {
 				Kfusion[0] = SK_MY[0]*(P[0][20] + P[0][0]*SH_MAG[2] + P[0][1]*SH_MAG[1] + P[0][2]*SH_MAG[0] - P[0][3]*SK_MY[2] - P[0][17]*SK_MY[1] - P[0][16]*SK_MY[3] + P[0][18]*SK_MY[4]);
 				Kfusion[1] = SK_MY[0]*(P[1][20] + P[1][0]*SH_MAG[2] + P[1][1]*SH_MAG[1] + P[1][2]*SH_MAG[0] - P[1][3]*SK_MY[2] - P[1][17]*SK_MY[1] - P[1][16]*SK_MY[3] + P[1][18]*SK_MY[4]);
 				Kfusion[2] = SK_MY[0]*(P[2][20] + P[2][0]*SH_MAG[2] + P[2][1]*SH_MAG[1] + P[2][2]*SH_MAG[0] - P[2][3]*SK_MY[2] - P[2][17]*SK_MY[1] - P[2][16]*SK_MY[3] + P[2][18]*SK_MY[4]);
@@ -304,7 +295,7 @@ void Ekf::fuseMag()
 			SK_MZ[3] = 2.0f*q0*q1 - 2.0f*q2*q3;
 			SK_MZ[4] = 2.0f*q0*q2 + 2.0f*q1*q3;
 
-			if (!update_mag_states_only) {
+			if (!_update_mag_states_only) {
 				Kfusion[0] = SK_MZ[0]*(P[0][21] + P[0][0]*SH_MAG[1] - P[0][1]*SH_MAG[2] + P[0][3]*SH_MAG[0] + P[0][2]*SK_MZ[2] + P[0][18]*SK_MZ[1] + P[0][16]*SK_MZ[4] - P[0][17]*SK_MZ[3]);
 				Kfusion[1] = SK_MZ[0]*(P[1][21] + P[1][0]*SH_MAG[1] - P[1][1]*SH_MAG[2] + P[1][3]*SH_MAG[0] + P[1][2]*SK_MZ[2] + P[1][18]*SK_MZ[1] + P[1][16]*SK_MZ[4] - P[1][17]*SK_MZ[3]);
 				Kfusion[2] = SK_MZ[0]*(P[2][21] + P[2][0]*SH_MAG[1] - P[2][1]*SH_MAG[2] + P[2][3]*SH_MAG[0] + P[2][2]*SK_MZ[2] + P[2][18]*SK_MZ[1] + P[2][16]*SK_MZ[4] - P[2][17]*SK_MZ[3]);

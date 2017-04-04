@@ -265,6 +265,7 @@ private:
 
 	float _mag_innov[3]{};		// earth magnetic field innovations
 	float _mag_innov_var[3]{};	// earth magnetic field innovation variance
+	bool _update_mag_states_only;	// true if 3-axis magnetometer fusion is only allowed to modify the magnetic field states
 
 	float _airspeed_innov;		// airspeed measurement innovation
 	float _airspeed_innov_var;	// airspeed measurement innovation variance

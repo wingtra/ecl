@@ -884,6 +884,32 @@ void Ekf::controlMagFusion()
 				_control_status.flags.mag_3D = false;
 			}
 
+			/*
+			When flying as a fixed wing aircraft, poor quality magnetometer data can cause an error in pitch/roll and accel bias estimates.
+			When MAG_FUSE_TYPE_AUTOFW is selected and the vehicle is flying as a fixed wing as detected by the use of wind estimation
+			and current airspeed estimates, then magnetometer fusion is only allowed to access the magnetic field states.
+			*/
+			if ((_params.mag_fusion_type == MAG_FUSE_TYPE_AUTOFW)
+					&& _control_status.flags.wind
+					&& (_time_last_imu - _time_last_airspeed < 1E7)) {
+				if (!_update_mag_states_only) {
+					_update_mag_states_only = true;
+
+					// When re-commencing use of magnetometer to correct vehicle states
+					// set the field state variance to the observation variance and zero
+					// the covariance terms to allow the field states re-learn rapidly
+					zeroRows(P,16,21);
+					zeroCols(P,16,21);
+					for (uint8_t rc_index=16; rc_index <= 21; rc_index ++) {
+						P[rc_index][rc_index] = sq(_params.mag_noise);
+
+					}
+				}
+			} else {
+				_update_mag_states_only = false;
+
+			}
+
 		} else if (_params.mag_fusion_type == MAG_FUSE_TYPE_HEADING) {
 			// always use heading fusion
 			_control_status.flags.mag_hdg = true;
