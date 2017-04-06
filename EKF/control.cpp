@@ -892,9 +892,10 @@ void Ekf::controlMagFusion()
 			if ((_params.mag_fusion_type == MAG_FUSE_TYPE_AUTOFW)
 					&& _control_status.flags.wind
 					&& (_time_last_imu - _time_last_airspeed < 1E7)) {
-				if (!_update_mag_states_only) {
-					_update_mag_states_only = true;
+				_update_mag_states_only = true;
 
+			} else {
+				if (_update_mag_states_only) {
 					// When re-commencing use of magnetometer to correct vehicle states
 					// set the field state variance to the observation variance and zero
 					// the covariance terms to allow the field states re-learn rapidly
@@ -905,7 +906,6 @@ void Ekf::controlMagFusion()
 
 					}
 				}
-			} else {
 				_update_mag_states_only = false;
 
 			}
