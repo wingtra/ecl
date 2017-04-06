@@ -221,6 +221,15 @@ bool Ekf::update()
 		predictState();
 		predictCovariance();
 
+		// update range data contineous flag (5Hz ie 200 ms)
+		/* Timing */
+		static hrt_abstime t = 0;
+		static hrt_abstime t_prev = 0;
+		t = hrt_absolute_time();
+		_dt_update = t_prev != 0 ? (t - t_prev) * 0.000001f : 0.0f;
+		t_prev = t;
+
+
 		// run a separate filter for terrain estimation
 		runTerrainEstimator();
 
