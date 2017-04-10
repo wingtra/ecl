@@ -61,7 +61,19 @@ void Ekf::controlFusionModes()
 		if ((angle_err_var_vec(0) + angle_err_var_vec(1)) < sq(0.05235f)) {
 			_control_status.flags.tilt_align = true;
 			_control_status.flags.yaw_align = resetMagHeading(_mag_sample_delayed.mag);
-			ECL_INFO("EKF alignment complete");
+
+			// send alignment status message to the console
+			if (_control_status.flags.baro_hgt) {
+				ECL_INFO("EKF aligned, (pressure height, IMU buf: %i, OBS buf: %i)",(int)_imu_buffer_length,(int)_obs_buffer_length);
+			} else if (_control_status.flags.ev_hgt) {
+				ECL_INFO("EKF aligned, (EV height, IMU buf: %i, OBS buf: %i)",(int)_imu_buffer_length,(int)_obs_buffer_length);
+			} else if (_control_status.flags.gps_hgt) {
+				ECL_INFO("EKF aligned, (GPS height, IMU buf: %i, OBS buf: %i)",(int)_imu_buffer_length,(int)_obs_buffer_length);
+			} else if (_control_status.flags.rng_hgt) {
+				ECL_INFO("EKF aligned, (range height, IMU buf: %i, OBS buf: %i)",(int)_imu_buffer_length,(int)_obs_buffer_length);
+			} else {
+				ECL_ERR("EKF aligned, (unknown height, IMU buf: %i, OBS buf: %i)",(int)_imu_buffer_length,(int)_obs_buffer_length);
+			}
 
 		}
 
@@ -71,8 +83,12 @@ void Ekf::controlFusionModes()
 	_gps_data_ready = _gps_buffer.pop_first_older_than(_imu_sample_delayed.time_us, &_gps_sample_delayed);
 	_mag_data_ready = _mag_buffer.pop_first_older_than(_imu_sample_delayed.time_us, &_mag_sample_delayed);
 	_baro_data_ready = _baro_buffer.pop_first_older_than(_imu_sample_delayed.time_us, &_baro_sample_delayed);
+
+	// calculate 2,2 element of rotation matrix from sensor frame to earth frame
+	_R_rng_to_earth_2_2 = _R_to_earth(2, 0) * _sin_tilt_rng + _R_to_earth(2, 2) * _cos_tilt_rng;
 	_range_data_ready = _range_buffer.pop_first_older_than(_imu_sample_delayed.time_us, &_range_sample_delayed)
-			&& (_R_to_earth_hov(2, 2) > 0.7071f);
+			&& (_R_rng_to_earth_2_2 > 0.7071f);
+
 	_flow_data_ready = _flow_buffer.pop_first_older_than(_imu_sample_delayed.time_us, &_flow_sample_delayed)
 			&&  (_R_to_earth(2, 2) > 0.7071f);
 	_ev_data_ready = _ext_vision_buffer.pop_first_older_than(_imu_sample_delayed.time_us, &_ev_sample_delayed);
@@ -89,10 +105,16 @@ void Ekf::controlFusionModes()
 	controlBaroFusion();
 	controlRangeFinderFusion();
 	controlAirDataFusion();
+	controlBetaFusion();
 
-	// for efficiency, fusion of direct state observations for position ad velocity is performed sequentially
+	// for efficiency, fusion of direct state observations for position and velocity is performed sequentially
 	// in a single function using sensor data from multiple sources (GPS, external vision, baro, range finder, etc)
 	controlVelPosFusion();
+
+	// report dead reckoning if we are no longer fusing measurements that constrain velocity drift
+	_is_dead_reckoning = (_time_last_imu - _time_last_pos_fuse > _params.no_aid_timeout_max)
+			&& (_time_last_imu - _time_last_vel_fuse > _params.no_aid_timeout_max)
+			&& (_time_last_imu - _time_last_of_fuse > _params.no_aid_timeout_max);
 
 }
 
@@ -107,7 +129,7 @@ void Ekf::controlExternalVisionFusion()
 			if (_time_last_imu - _time_last_ext_vision < 2 * EV_MAX_INTERVAL) {
 				// turn on use of external vision measurements for position and height
 				_control_status.flags.ev_pos = true;
-				ECL_INFO("EKF switching to external vision position fusion");
+				ECL_INFO("EKF commencing external vision position fusion");
 				// turn off other forms of height aiding
 				_control_status.flags.baro_hgt = false;
 				_control_status.flags.gps_hgt = false;
@@ -169,7 +191,7 @@ void Ekf::controlExternalVisionFusion()
 				_control_status.flags.mag_3D = false;
 				_control_status.flags.mag_dec = false;
 
-				ECL_INFO("EKF switching to external vision yaw fusion");
+				ECL_INFO("EKF commencing external vision yaw fusion");
 			}
 		}
 
@@ -231,7 +253,7 @@ void Ekf::controlOpticalFlowFusion()
 					float heightAboveGndEst = fmaxf((_terrain_vpos - _state.pos(2)), _params.rng_gnd_clearance);
 
 					// calculate absolute distance from focal point to centre of frame assuming a flat earth
-					float range = heightAboveGndEst / _R_to_earth_hov(2, 2);
+					float range = heightAboveGndEst / _R_rng_to_earth_2_2;
 
 					if ((range - _params.rng_gnd_clearance) > 0.3f && _flow_sample_delayed.dt > 0.05f) {
 						// we should have reliable OF measurements so
@@ -266,15 +288,21 @@ void Ekf::controlOpticalFlowFusion()
 						_state.pos(0) = 0.0f;
 						_state.pos(1) = 0.0f;
 
-						// reset the corresponding covariances
-						// we are by definition at the origin at commencement so variances are also zeroed
-						zeroRows(P,7,8);
-						zeroCols(P,7,8);
-
-						// align the output observer to the EKF states
-						alignOutputFilter();
+					} else {
+						// set to the last known position
+						_state.pos(0) = _last_known_posNE(0);
+						_state.pos(1) = _last_known_posNE(1);
 
 					}
+
+					// reset the corresponding covariances
+					// we are by definition at the origin at commencement so variances are also zeroed
+					zeroRows(P,7,8);
+					zeroCols(P,7,8);
+
+					// align the output observer to the EKF states
+					alignOutputFilter();
+
 				}
 			}
 
@@ -328,21 +356,21 @@ void Ekf::controlGpsFusion()
 
 				// If the heading is valid start using gps aiding
 				if (_control_status.flags.yaw_align) {
-					_control_status.flags.gps = true;
-					_time_last_gps = _time_last_imu;
-
 					// if we are not already aiding with optical flow, then we need to reset the position and velocity
+					// otherwise we only need to reset the position
+					_control_status.flags.gps = true;
 					if (!_control_status.flags.opt_flow) {
-						if (resetPosition() && resetVelocity()) {
-							_control_status.flags.gps = true;
-
-						} else {
+						if (!resetPosition() || !resetVelocity()) {
 							_control_status.flags.gps = false;
 
 						}
+					} else if (!resetPosition()) {
+						_control_status.flags.gps = false;
+
 					}
 					if (_control_status.flags.gps) {
-						ECL_INFO("EKF commencing GPS aiding");
+						ECL_INFO("EKF commencing GPS fusion");
+					       _time_last_gps = _time_last_imu;
 
 					}
 				}
@@ -365,7 +393,7 @@ void Ekf::controlGpsFusion()
 				// Reset states to the last GPS measurement
 				resetPosition();
 				resetVelocity();
-				ECL_WARN("EKF GPS fusion timout - resetting to GPS");
+				ECL_WARN("EKF GPS fusion timeout - reset to GPS");
 
 				// Reset the timeout counters
 				_time_last_pos_fuse = _time_last_imu;
@@ -414,7 +442,7 @@ void Ekf::controlGpsFusion()
 			_last_known_posNE(0) = _state.pos(0);
 			_last_known_posNE(1) = _state.pos(1);
 			_state.vel.setZero();
-			ECL_WARN("EKF GPS fusion timout - stopping GPS aiding");
+			ECL_WARN("EKF measurement timeout - stopping navigation");
 
 		}
 	}
@@ -483,7 +511,7 @@ void Ekf::controlHeightSensorTimeouts()
 
 				// request a reset
 				reset_height = true;
-				ECL_INFO("EKF baro hgt timeout - reset to GPS");
+				ECL_WARN("EKF baro hgt timeout - reset to GPS");
 
 			} else if (reset_to_baro){
 				// set height sensor health
@@ -497,7 +525,7 @@ void Ekf::controlHeightSensorTimeouts()
 
 				// request a reset
 				reset_height = true;
-				ECL_INFO("EKF baro hgt timeout - reset to baro");
+				ECL_WARN("EKF baro hgt timeout - reset to baro");
 
 			} else {
 				// we have nothing we can reset to
@@ -542,7 +570,7 @@ void Ekf::controlHeightSensorTimeouts()
 
 				// request a reset
 				reset_height = true;
-				ECL_INFO("EKF gps hgt timeout - reset to baro");
+				ECL_WARN("EKF gps hgt timeout - reset to baro");
 
 			} else if (reset_to_gps) {
 				// set height sensor health
@@ -556,7 +584,7 @@ void Ekf::controlHeightSensorTimeouts()
 
 				// request a reset
 				reset_height = true;
-				ECL_INFO("EKF gps hgt timeout - reset to GPS");
+				ECL_WARN("EKF gps hgt timeout - reset to GPS");
 
 			} else {
 				// we have nothing to reset to
@@ -594,7 +622,7 @@ void Ekf::controlHeightSensorTimeouts()
 
 				// request a reset
 				reset_height = true;
-				ECL_INFO("EKF rng hgt timeout - reset to baro");
+				ECL_WARN("EKF rng hgt timeout - reset to baro");
 
 			} else if (reset_to_rng) {
 				// set height sensor health
@@ -608,7 +636,7 @@ void Ekf::controlHeightSensorTimeouts()
 
 				// request a reset
 				reset_height = true;
-				ECL_INFO("EKF rng hgt timeout - reset to rng hgt");
+				ECL_WARN("EKF rng hgt timeout - reset to rng hgt");
 
 			} else {
 				// we have nothing to reset to
@@ -646,7 +674,7 @@ void Ekf::controlHeightSensorTimeouts()
 
 				// request a reset
 				reset_height = true;
-				ECL_INFO("EKF ev hgt timeout - reset to baro");
+				ECL_WARN("EKF ev hgt timeout - reset to baro");
 
 			} else if (reset_to_ev) {
 				// reset the height mode
@@ -657,7 +685,7 @@ void Ekf::controlHeightSensorTimeouts()
 
 				// request a reset
 				reset_height = true;
-				ECL_INFO("EKF ev hgt timeout - reset to ev hgt");
+				ECL_WARN("EKF ev hgt timeout - reset to ev hgt");
 
 			} else {
 				// we have nothing to reset to
@@ -719,12 +747,7 @@ void Ekf::controlRangeFinderFusion()
 		// correct the range data for position offset relative to the IMU
 		Vector3f pos_offset_body = _params.rng_pos_body - _params.imu_pos_body;
 		Vector3f pos_offset_earth = _R_to_earth * pos_offset_body;
-		_range_sample_delayed.rng += pos_offset_earth(2) / _R_to_earth_hov(2, 2);
-
-		// always fuse available range finder data into a terrain height estimator if the estimator has been initialised
-		if (_terrain_initialised) {
-			fuseHagl();
-		}
+		_range_sample_delayed.rng += pos_offset_earth(2) / _R_rng_to_earth_2_2;
 
 		// only use range finder as a height observation in the main filter if specifically enabled
 		if (_control_status.flags.rng_hgt) {
@@ -748,25 +771,76 @@ void Ekf::controlRangeFinderFusion()
 
 void Ekf::controlAirDataFusion()
 {
-	// control activation and initialisation/reset of wind states
-	// wind states are required to do airspeed fusion
-	if (_time_last_imu - _time_last_arsp_fuse > 10e6 || _time_last_arsp_fuse == 0) {
+        // control activation and initialisation/reset of wind states required for airspeed fusion
+
+        // If both airspeed and sideslip fusion have timed out then we no longer have valid wind estimates
+        bool airspeed_timed_out = _time_last_imu - _time_last_arsp_fuse > 10e6;
+        bool sideslip_timed_out = _time_last_imu - _time_last_beta_fuse > 10e6;
+        if (_control_status.flags.wind && airspeed_timed_out && sideslip_timed_out) {
+                // if the airspeed or sideslip measurements have timed out for 10 seconds we declare the wind estimate to be invalid
 		_control_status.flags.wind = false;
 
 	}
 
-	if (_tas_data_ready) {
-		// if we have airspeed data to fuse and winds states are inactive, then
-		// they need to be activated and the corresponding states and covariances reset
+	// Always try to fuse airspeed data if available and we are in flight and the filter is operating in a normal aiding mode
+	bool is_aiding = _control_status.flags.gps || _control_status.flags.opt_flow || _control_status.flags.ev_pos;
+	if (_tas_data_ready && _control_status.flags.in_air && is_aiding) {
+		// If starting wind state estimation, reset the wind states and covariances before fusing any data
 		if (!_control_status.flags.wind) {
+			// activate the wind states
 			_control_status.flags.wind = true;
+			// reset the timout timer to prevent repeated resets
+			_time_last_arsp_fuse = _time_last_imu;
+			_time_last_beta_fuse = _time_last_imu;
+			// reset the wind speed states and corresponding covariances
+			resetWindStates();
+			resetWindCovariance();
+
+		}
+
+		fuseAirspeed();
+
+	}
+}
+
+void Ekf::controlBetaFusion()
+{
+        // control activation and initialisation/reset of wind states required for synthetic sideslip fusion fusion
+
+        // If both airspeed and sideslip fusion have timed out then we no longer have valid wind estimates
+        bool sideslip_timed_out = _time_last_imu - _time_last_beta_fuse > 10e6;
+        bool airspeed_timed_out = _time_last_imu - _time_last_arsp_fuse > 10e6;
+        if(_control_status.flags.wind && airspeed_timed_out && sideslip_timed_out){
+                _control_status.flags.wind = false;
+
+        }
+
+	// Perform synthetic sideslip fusion when in-air and sideslip fuson had been enabled externally in addition to the following criteria:
+
+	// Suffient time has lapsed sice the last fusion
+	bool beta_fusion_time_triggered = _time_last_imu - _time_last_beta_fuse > _params.beta_avg_ft_us;
+
+	// The filter is operating in a mode where velocity states can be used
+	bool vel_states_active = _control_status.flags.gps || _control_status.flags.opt_flow || _control_status.flags.ev_pos;
+
+	if(beta_fusion_time_triggered && _control_status.flags.fuse_beta && _control_status.flags.in_air && vel_states_active) {
+		// If starting wind state estimation, reset the wind states and covariances before fusing any data
+		if (!_control_status.flags.wind) {
+			// activate the wind states
+			_control_status.flags.wind = true;
+			// reset the timout timers to prevent repeated resets
+			_time_last_beta_fuse = _time_last_imu;
+			_time_last_arsp_fuse = _time_last_imu;
+			// reset the wind speed states and corresponding covariances
 			resetWindStates();
 			resetWindCovariance();
 		}
 
-		fuseAirspeed();
-		
-	}
+                fuseSideslip();
+ 	}
+
+ 	
+
 }
 
 void Ekf::controlMagFusion()
@@ -787,7 +861,7 @@ void Ekf::controlMagFusion()
 
 		// Determine if we should use simple magnetic heading fusion which works better when there are large external disturbances
 		// or the more accurate 3-axis fusion
-		if (_params.mag_fusion_type == MAG_FUSE_TYPE_AUTO) {
+		if (_params.mag_fusion_type == MAG_FUSE_TYPE_AUTO || _params.mag_fusion_type == MAG_FUSE_TYPE_AUTOFW) {
 			// start 3D fusion if in-flight and height has increased sufficiently
 			// to be away from ground magnetic anomalies
 			// don't switch back to heading fusion until we are back on the ground
@@ -808,6 +882,32 @@ void Ekf::controlMagFusion()
 				// use heading fusion when on the ground
 				_control_status.flags.mag_hdg = true;
 				_control_status.flags.mag_3D = false;
+			}
+
+			/*
+			When flying as a fixed wing aircraft, poor quality magnetometer data can cause an error in pitch/roll and accel bias estimates.
+			When MAG_FUSE_TYPE_AUTOFW is selected and the vehicle is flying as a fixed wing as detected by the use of wind estimation
+			and current airspeed estimates, then magnetometer fusion is only allowed to access the magnetic field states.
+			*/
+			if ((_params.mag_fusion_type == MAG_FUSE_TYPE_AUTOFW)
+					&& _control_status.flags.wind
+					&& (_time_last_imu - _time_last_airspeed < 1E6)) {
+				_update_mag_states_only = true;
+
+			} else {
+				if (_update_mag_states_only) {
+					// When re-commencing use of magnetometer to correct vehicle states
+					// set the field state variance to the observation variance and zero
+					// the covariance terms to allow the field states re-learn rapidly
+					zeroRows(P,16,21);
+					zeroCols(P,16,21);
+					for (uint8_t rc_index=16; rc_index <= 21; rc_index ++) {
+						P[rc_index][rc_index] = sq(_params.mag_noise);
+
+					}
+				}
+				_update_mag_states_only = false;
+
 			}
 
 		} else if (_params.mag_fusion_type == MAG_FUSE_TYPE_HEADING) {

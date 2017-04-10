@@ -69,6 +69,7 @@ set(SRCS
 	control.cpp
 	geo.cpp
 	mathlib.cpp
+	sideslip_fusion.cpp
 )
 add_definitions(-std=c++11 -Wall -Werror)
 

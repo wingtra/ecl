@@ -52,7 +52,7 @@ class EstimatorInterface
 
 public:
 	EstimatorInterface();
-	~EstimatorInterface();
+	~EstimatorInterface() = default;
 
 	virtual bool init(uint64_t timestamp) = 0;
 	virtual bool update() = 0;
@@ -67,6 +67,9 @@ public:
 	// gets the innovation of airspeed measurement
  	virtual void get_airspeed_innov(float *airspeed_innov) = 0;
 
+	// gets the innovation of the synthetic sideslip measurement
+	virtual void get_beta_innov(float *beta_innov) = 0;
+
 	// gets the innovations of the heading measurement
 	virtual void get_heading_innov(float *heading_innov) = 0;
 
@@ -80,6 +83,9 @@ public:
 	// gets the innovation variance of the airspeed measurement
  	virtual void get_airspeed_innov_var(float *get_airspeed_innov_var) = 0;
 
+	// gets the innovation variance of the synthetic sideslip measurement
+	virtual void get_beta_innov_var(float *get_beta_innov_var) = 0;
+
 	// gets the innovation variance of the heading measurement
 	virtual void get_heading_innov_var(float *heading_innov_var) = 0;
 
@@ -89,8 +95,10 @@ public:
 
 	virtual void get_covariances(float *covariances) = 0;
 
-	// get the ekf WGS-84 origin position and height and the system time it was last set
+	// gets the variances for the NED velocity states
 	virtual void get_vel_var(Vector3f &vel_var) = 0;
+
+	// gets the variances for the NED position states
 	virtual void get_pos_var(Vector3f &pos_var) = 0;
 
 	// gets the innovation variance of the flow measurement
@@ -105,11 +113,30 @@ public:
 	// gets the innovation of the HAGL measurement
 	virtual void get_hagl_innov(float *flow_innov_var) = 0;
 
-	// get the ekf WGS-84 origin positoin and height and the system time it was last set
-	virtual void get_ekf_origin(uint64_t *origin_time, map_projection_reference_s *origin_pos, float *origin_alt) = 0;
+	// return an array containing the output predictor angular, velocity and position tracking
+	// error magnitudes (rad), (m/s), (m)
+	virtual void get_output_tracking_error(float error[3]) = 0;
+
+	/*
+	Returns  following IMU vibration metrics in the following array locations
+	0 : Gyro delta angle coning metric = filtered length of (delta_angle x prev_delta_angle)
+	1 : Gyro high frequency vibe = filtered length of (delta_angle - prev_delta_angle)
+	2 : Accel high frequency vibe = filtered length of (delta_velocity - prev_delta_velocity)
+	*/
+	virtual void get_imu_vibe_metrics(float vibe[3]) = 0;
+
+	// get the ekf WGS-84 origin position and height and the system time it was last set
+	// return true if the origin is valid
+	virtual bool get_ekf_origin(uint64_t *origin_time, map_projection_reference_s *origin_pos, float *origin_alt) = 0;
 
 	// get the 1-sigma horizontal and vertical position uncertainty of the ekf WGS-84 position
-	virtual void get_ekf_accuracy(float *ekf_eph, float *ekf_epv, bool *dead_reckoning) = 0;
+	virtual void get_ekf_gpos_accuracy(float *ekf_eph, float *ekf_epv, bool *dead_reckoning) = 0;
+
+	// get the 1-sigma horizontal and vertical position uncertainty of the ekf local position
+	virtual void get_ekf_lpos_accuracy(float *ekf_eph, float *ekf_epv, bool *dead_reckoning) = 0;
+
+	// get the 1-sigma horizontal and vertical velocity uncertainty
+	virtual void get_ekf_vel_accuracy(float *ekf_evh, float *ekf_evv, bool *dead_reckoning) = 0;
 
 	// ask estimator for sensor data collection decision and do any preprocessing if required, returns true if not defined
 	virtual bool collect_gps(uint64_t time_usec, struct gps_message *gps) { return true; }
@@ -118,23 +145,22 @@ public:
 	virtual bool collect_imu(imuSample &imu) { return true; }
 
 	// set delta angle imu data
-	void setIMUData(uint64_t time_usec, uint64_t delta_ang_dt, uint64_t delta_vel_dt, float *delta_ang, float *delta_vel);
+	void setIMUData(uint64_t time_usec, uint64_t delta_ang_dt, uint64_t delta_vel_dt, float (&delta_ang)[3], float (&delta_vel)[3]);
 
 	// set magnetometer data
-	void setMagData(uint64_t time_usec, float *data);
-	//void setMagData(uint64_t time_usec, struct magSample *mag);
+	void setMagData(uint64_t time_usec, float (&data)[3]);
 
 	// set gps data
 	void setGpsData(uint64_t time_usec, struct gps_message *gps);
 
 	// set baro data
-	void setBaroData(uint64_t time_usec, float *data);
+	void setBaroData(uint64_t time_usec, float data);
 
 	// set airspeed data
-	void setAirspeedData(uint64_t time_usec, float *true_airspeed, float *eas2tas);
+	void setAirspeedData(uint64_t time_usec, float true_airspeed, float eas2tas);
 
 	// set range data
-	void setRangeData(uint64_t time_usec, float *data);
+	void setRangeData(uint64_t time_usec, float data);
 
 	// set optical flow data
 	void setOpticalFlowData(uint64_t time_usec, flow_message *flow);
@@ -149,16 +175,18 @@ public:
 	// set vehicle landed status data
 	void set_in_air_status(bool in_air) {_control_status.flags.in_air = in_air;}
 
+	// set flag if synthetic sideslip measurement should be fused
+	void set_fuse_beta_flag(bool fuse_beta) {_control_status.flags.fuse_beta = fuse_beta;}
+
 	// return true if the global position estimate is valid
 	virtual bool global_position_is_valid() = 0;
 
-	// return true if the estimate is valid
-	// return the estimated terrain vertical position relative to the NED origin in m
-	virtual bool get_terrain_vert_pos(float *ret) = 0;
+	// return true if the EKF is dead reckoning the position using inertial data only
+	virtual bool inertial_dead_reckoning() = 0;
 
 	// return true if the estimate is valid
-	// return the estimated terrain vertical position 1-std error in m
-	virtual bool get_terrain_vert_err(float *ret) = 0;
+	// return the estimated terrain vertical position relative to the NED origin
+	virtual bool get_terrain_vert_pos(float *ret) = 0;
 
 	// return true if the local position estimate is valid
 	bool local_position_is_valid();
@@ -250,16 +278,26 @@ public:
 	// return a bitmask integer that describes which state estimates can be used for flight control
 	virtual void get_ekf_soln_status(uint16_t *status) = 0;
 
-	// returns a bitmask integer that describes which observations are rejected
-	void get_innovation_fault_status(uint16_t *value);
-
 protected:
 
 	parameters _params;		// filter parameters
 
-	static const uint8_t OBS_BUFFER_LENGTH = 10;	// defines how many measurement samples we can buffer
-	static const uint8_t IMU_BUFFER_LENGTH = 30;	// defines how many imu samples we can buffer
-	static const unsigned FILTER_UPDATE_PERIOD_MS = 10;	// ekf prediction period in milliseconds
+	/*
+	 OBS_BUFFER_LENGTH defines how many observations (non-IMU measurements) we can buffer
+	 which sets the maximum frequency at which we can process non-IMU measurements. Measurements that
+	 arrive too soon after the previous measurement will not be processed.
+	 max freq (Hz) = (OBS_BUFFER_LENGTH - 1) / (IMU_BUFFER_LENGTH * FILTER_UPDATE_PERIOD_MS * 0.001)
+	 This can be adjusted to match the max sensor data rate plus some margin for jitter.
+	*/
+	uint8_t _obs_buffer_length;
+	/*
+	IMU_BUFFER_LENGTH defines how many IMU samples we buffer which sets the time delay from current time to the
+	EKF fusion time horizon and therefore the maximum sensor time offset relative to the IMU that we can compensate for.
+	max sensor time offet (msec) =  IMU_BUFFER_LENGTH * FILTER_UPDATE_PERIOD_MS
+	This can be adjusted to a value that is FILTER_UPDATE_PERIOD_MS longer than the maximum observation time delay.
+	*/
+	uint8_t _imu_buffer_length;
+	static const unsigned FILTER_UPDATE_PERIOD_MS = 12;	// ekf prediction period in milliseconds - this should ideally be an integer multiple of the IMU time delta
 
 	unsigned _min_obs_interval_us; // minimum time interval between observations that will guarantee data is not lost (usec)
 
@@ -298,9 +336,18 @@ protected:
 	float _vel_pos_test_ratio[6];   // velocity and position innovation consistency check ratios
 	float _tas_test_ratio;		// tas innovation consistency check ratio
 	float _terr_test_ratio;		// height above terrain measurement innovation consistency check ratio
-	innovation_fault_status_u _innov_check_fail_status;
+	float _beta_test_ratio;		// sideslip innovation consistency check ratio
+	innovation_fault_status_u _innov_check_fail_status{};
 
-	bool _range_data_continuous;	// true when we are getting continuous data from the range finder
+	bool _is_dead_reckoning;	// true if we are no longer fusing measurements that constrain horizontal velocity drift
+
+	// IMU vibration monitoring
+	Vector3f _delta_ang_prev;	// delta angle from the previous IMU measurement
+	Vector3f _delta_vel_prev;	// delta velocity from the previous IMU measurement
+	float _vibe_metrics[3];		// IMU vibration metrics
+					// [0] Level of coning vibration in the IMU delta angles (rad^2)
+					// [1] high frequency vibraton level in the IMU delta angle data (rad)
+					// [2] high frequency vibration level in the IMU delta velocity data (m/s)
 
 	// data buffer instances
 	RingBuffer<imuSample> _imu_buffer;
@@ -322,7 +369,7 @@ protected:
 	uint64_t _time_last_ext_vision; // timestamp of last external vision measurement in microseconds
 	uint64_t _time_last_optflow;
 
-	fault_status_u _fault_status;
+	fault_status_u _fault_status{};
 
 	// allocate data buffers and intialise interface variables
 	bool initialise_interface(uint64_t timestamp);
@@ -334,15 +381,15 @@ protected:
 	float _mag_declination_to_save_deg; // magnetic declination to save to EKF2_MAG_DECL (deg)
 
 	// this is the current status of the filter control modes
-	filter_control_status_u _control_status;
+	filter_control_status_u _control_status{};
 
 	// this is the previous status of the filter control modes - used to detect mode transitions
-	filter_control_status_u _control_status_prev;
+	filter_control_status_u _control_status_prev{};
 
 	// perform a vector cross product
 	Vector3f cross_product(const Vector3f &vecIn1, const Vector3f &vecIn2);
 
 	// calculate the inverse rotation matrix from a quaternion rotation
-	Matrix3f quat_to_invrotmat(const Quaternion quat);
+	Matrix3f quat_to_invrotmat(const Quaternion& quat);
 
 };

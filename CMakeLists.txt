@@ -59,6 +59,7 @@ px4_add_module(
 		EKF/optflow_fusion.cpp
 		EKF/control.cpp
 		EKF/terrain_estimator.cpp
+		EKF/sideslip_fusion.cpp
 	DEPENDS
 		platforms__common
 	)
